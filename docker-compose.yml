@@ -1,0 +1,70 @@
+# ═══════════════════════════════════════════════════════════════════════
+# TitanCode Technologies — Docker Compose Configuration
+# ═══════════════════════════════════════════════════════════════════════
+# Docker Compose orchestrates multiple containers (services) that work
+# together. This file defines TWO services:
+#
+#   1. db  → PostgreSQL database server
+#   2. api → Our FastAPI application
+#
+# Usage:
+#   docker-compose up -d --build   → Build and start both services
+#   docker-compose down            → Stop and remove containers
+#   docker-compose logs -f api     → Watch API logs in real-time
+# ═══════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL Database ─────────────────────────────────────────────
+  # This runs a PostgreSQL 15 instance inside a Docker container.
+  # Data is persisted in a Docker volume so it survives container restarts.
+  db:
+    image: postgres:15-alpine                  # Lightweight Alpine-based Postgres image
+    container_name: titancode_db               # Human-readable name for `docker ps`
+    restart: always                            # Auto-restart if the container crashes
+    environment:
+      # These variables configure the Postgres instance on first run:
+      POSTGRES_USER: postgres                  # Database superuser name
+      POSTGRES_PASSWORD: password123           # Superuser password (change in production!)
+      POSTGRES_DB: titancode                   # Create this database automatically
+    ports:
+      - "5432:5432"                            # Map host:5432 → container:5432
+    volumes:
+      # Named volume — data persists even if the container is destroyed
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Docker checks if Postgres is ready to accept connections
+      # The API service waits for this before starting (see depends_on below)
+      test: ["CMD-SHELL", "pg_isready -U postgres -d titancode"]
+      interval: 5s                             # Check every 5 seconds
+      timeout: 5s                              # Fail if check takes > 5 seconds
+      retries: 5                               # Give up after 5 failed checks
+
+  # ── FastAPI Application ─────────────────────────────────────────────
+  # This builds our FastAPI app from the Dockerfile and runs it.
+  api:
+    build: .                                   # Build from ./Dockerfile
+    container_name: titancode_api              # Human-readable name
+    restart: always                            # Auto-restart on crash
+    ports:
+      - "8000:8000"                            # Map host:8000 → container:8000
+    env_file:
+      - .env                                   # Load SECRET_KEY and other vars from .env
+    environment:
+      # Override the DATABASE_URL to point to the Docker Postgres container
+      # Note: inside Docker, "db" is the hostname (not "localhost")
+      - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/titancode
+    volumes:
+      # Persist uploaded files (KYC, Portfolio, etc.)
+      - uploads_data:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy             # Wait for Postgres healthcheck to pass
+        # This prevents the API from starting before the database is ready,
+        # which would cause connection errors on startup.
+
+# ── Named Volumes ───────────────────────────────────────────────────────
+# Docker manages these volumes — they persist data between container restarts.
+volumes:
+  postgres_data:
+  uploads_data:
