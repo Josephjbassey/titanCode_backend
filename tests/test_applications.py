@@ -1,6 +1,6 @@
 import pytest
 from httpx import AsyncClient
-from app.api.v1.endpoints.auth import create_access_token
+from app.core.security import create_access_token
 from datetime import timedelta
 
 @pytest.mark.asyncio
