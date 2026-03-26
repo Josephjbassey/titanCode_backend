@@ -22,8 +22,8 @@ class ApplicationBase(BaseModel):
 
 
 class ApplicationCreate(ApplicationBase):
-    """Schema for POST /applications/apply — includes the applicant's user ID."""
-    user_id: int
+    """Schema for POST /applications/apply — applicant ID is inferred from session."""
+    pass
 
 
 class ApplicationUpdate(BaseModel):

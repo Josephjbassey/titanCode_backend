@@ -31,7 +31,7 @@ from typing import Any, List
 from app.core.notifications import manager as notification_manager
 
 from app.db.database import get_db
-from app.db.models import Application, User
+from app.db.models import Application, User, Department
 from app.schemas.application import (
     Application as AppSchema,
     ApplicationCreate,
@@ -63,23 +63,35 @@ async def apply_to_department(
     is still pending.
 
     Args:
-        app_in: The application data including user_id, department_id,
-                and optional github_url/portfolio links.
+        app_in: The application data (department_id, github_url, portfolio).
+        db: The database session.
+        current_user: The authenticated user submitting the application.
 
     Returns:
         AppSchema: The newly created application with status "pending".
 
     Raises:
+        HTTPException 404: If the department does not exist.
         HTTPException 400: If the user already has a pending application
                            for the same department.
     """
-    # Step 1: Check for duplicate pending applications
-    # We don't want the same user to apply twice to the same department
+    # Step 1: Validate the department exists
+    # If the user provides an invalid ID (like 0), we should return a clear 404
+    stmt = select(Department).where(Department.id == app_in.department_id)
+    dept_result = await db.execute(stmt)
+    if not dept_result.scalars().first():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Department with ID {app_in.department_id} not found",
+        )
+
+    # Step 2: Check for duplicate pending applications
+    # We use current_user.id to ensure security (users apply as themselves)
     result = await db.execute(
         select(Application).where(
-            Application.user_id == app_in.user_id,
+            Application.user_id == current_user.id,
             Application.department_id == app_in.department_id,
-            Application.status == "pending",  # Only block if still pending
+            Application.status == "pending",
         )
     )
     if result.scalars().first():
@@ -88,8 +100,12 @@ async def apply_to_department(
             detail="You already have a pending application for this department",
         )
 
-    # Step 2: Create the application record
-    application = Application(**app_in.model_dump())
+    # Step 3: Create the application record
+    # We manually set user_id from current_user to prevent IDOR attacks
+    application = Application(
+        **app_in.model_dump(),
+        user_id=current_user.id,
+    )
     db.add(application)
     await db.commit()
     await db.refresh(application)
