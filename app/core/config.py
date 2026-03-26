@@ -1,0 +1,65 @@
+"""
+TitanCode Technologies — Core Configuration
+=============================================
+This module loads all application settings from environment variables
+using Pydantic's BaseSettings. Values are read from a `.env` file at
+the project root so that secrets are never hardcoded in source code.
+
+Usage:
+    from app.core.config import settings
+    print(settings.SECRET_KEY)
+"""
+
+from typing import List, Union
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """
+    Application-wide settings, automatically populated from environment
+    variables or the `.env` file.
+
+    Attributes:
+        PROJECT_NAME:               Display name shown in Swagger UI.
+        API_V1_STR:                 URL prefix for all v1 API routes.
+        SECRET_KEY:                 Used to sign/verify JWT tokens — keep this private!
+        ALGORITHM:                  JWT signing algorithm (default: HS256).
+        ACCESS_TOKEN_EXPIRE_MINUTES: Lifespan of an access token in minutes.
+        REFRESH_TOKEN_EXPIRE_DAYS:  Lifespan of a refresh token in days.
+        BACKEND_CORS_ORIGINS:       List of allowed frontend origins for CORS.
+        DATABASE_URL:               Async PostgreSQL connection string
+                                    (e.g. postgresql+asyncpg://user:pass@host/db).
+    """
+
+    PROJECT_NAME: str = "TitanCode Technologies API"
+    API_V1_STR: str = "/api/v1"
+
+    # ── Security ────────────────────────────────────────────────────────
+    SECRET_KEY: str                          # Required — loaded from .env
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15    # Short-lived access tokens
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7       # Longer-lived refresh tokens
+
+    # ── CORS ────────────────────────────────────────────────────────────
+    # Stored as a comma-separated string in .env (e.g. "http://localhost:3000,http://localhost:8000")
+    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Split the comma-separated CORS string into a list of origins."""
+        return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]
+
+    # ── Database ────────────────────────────────────────────────────────
+    DATABASE_URL: str                        # Required — loaded from .env
+
+    # Tell Pydantic to read variables from the .env file
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
+
+
+# Singleton instance — import this throughout the app
+settings = Settings()

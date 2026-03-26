@@ -1,0 +1,32 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database
+*.sqlite3
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# FastAPI / Pytest / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/

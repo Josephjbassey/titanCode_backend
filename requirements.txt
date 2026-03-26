@@ -1,0 +1,34 @@
+# ═══════════════════════════════════════════════════════════════════════
+# TitanCode Technologies — Python Dependencies
+# ═══════════════════════════════════════════════════════════════════════
+# This file lists all Python packages required by the project.
+# Install them with: pip install -r requirements.txt
+#
+# Each package is pinned to a minimum version (>=) to ensure
+# compatibility while allowing minor updates for bug fixes.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── Web Framework ──────────────────────────────────────────────────────
+fastapi[standard]>=0.110.0         # FastAPI with standard extras (Jinja2, email-validator, etc.)
+uvicorn[standard]>=0.29.0          # ASGI server that runs FastAPI (with --reload support)
+
+# ── Database ───────────────────────────────────────────────────────────
+sqlalchemy[asyncio]>=2.0.28        # ORM with async support for database operations
+asyncpg>=0.29.0                    # PostgreSQL driver for async SQLAlchemy
+
+# ── Data Validation ────────────────────────────────────────────────────
+pydantic>=2.6.4                    # Request/response validation (used by FastAPI)
+pydantic-settings>=2.2.1           # Load settings from .env files
+
+# ── Authentication & Security ─────────────────────────────────────────
+pyjwt>=2.8.0                       # Create and verify JSON Web Tokens (JWT)
+passlib[bcrypt]>=1.7.4             # Password hashing with bcrypt algorithm
+bcrypt==4.0.1                      # Pinned for compatibility with passlib (v4.1+ breaks it)
+
+# ── Utilities ──────────────────────────────────────────────────────────
+python-multipart>=0.0.9            # Parse form data (required for OAuth2 login form)
+alembic>=1.13.1                    # Database migration tool (for future schema changes)
+
+# ── Production Hardening ──────────────────────────────────────────────
+slowapi>=0.1.9                     # Rate limiting (brute-force/abuse protection)
+python-json-logger>=2.0.0          # Structured JSON logging for production
