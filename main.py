@@ -33,7 +33,7 @@ from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
 from app.db.database import engine, Base, AsyncSessionLocal
 from app.db.models import User
-from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files
+from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -157,6 +157,7 @@ app.include_router(tasks.router, prefix=f"{settings.API_V1_STR}/tasks", tags=["t
 app.include_router(wallets.router, prefix=f"{settings.API_V1_STR}/wallets", tags=["wallets"])
 app.include_router(notifications.router, prefix=f"{settings.API_V1_STR}/notifications", tags=["notifications"])
 app.include_router(files.router, prefix=f"{settings.API_V1_STR}/files", tags=["files"])
+app.include_router(meetings.router, prefix=f"{settings.API_V1_STR}/meetings", tags=["meetings"])
 
 
 # ═══════════════════════════════════════════════════════════════════════

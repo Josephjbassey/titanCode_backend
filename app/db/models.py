@@ -283,3 +283,38 @@ class Transaction(Base):
 
     # Many-to-one: a transaction belongs to one wallet
     wallet = relationship("Wallet", back_populates="transactions")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MEETING MODEL
+# ═══════════════════════════════════════════════════════════════════════
+class Meeting(Base):
+    """
+    Represents a scheduled meeting between team members and clients.
+
+    Columns:
+        id:             Primary key.
+        title:          Meeting subject.
+        description:    Agenda or notes.
+        meeting_type:   video | audio | in_person
+        meeting_link:   External link (Agora, WebRTC, Zoom).
+        scheduled_at:   When the meeting is set to happen.
+        created_by:     FK → users.id — who scheduled it.
+        department_id:  FK → departments.id — which department this relates to.
+        client_id:      FK → users.id — the client involved (optional).
+        status:         scheduled | cancelled | completed
+        created_at:     Timestamp.
+    """
+    __tablename__ = "meetings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    meeting_type = Column(String(50), default="video", nullable=False)
+    meeting_link = Column(String(500), nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
+    client_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String(50), default="scheduled", nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
