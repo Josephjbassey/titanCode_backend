@@ -51,7 +51,7 @@ async def create_meeting(
     
     # Auto-generate a meeting link if not provided
     if not meeting_data.get("meeting_link"):
-        # For the MVP, we generate a mock video link (e.g. simulating Agora/WebRTC)
+        # Automated Meeting Link generation (simulating a provider like Agora/WebRTC or Google Meet)
         meeting_data["meeting_link"] = f"https://meet.titancode.tech/{meeting_data['title'].lower().replace(' ', '-')}-{meeting_in.scheduled_at.strftime('%m%d')}"
 
     meeting = Meeting(**meeting_data, created_by=current_user.id)

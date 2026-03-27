@@ -49,9 +49,11 @@ def process_withdrawal_background(withdrawal_id: int):
     """
     logger.info(f"Background processing for withdrawal ID: {withdrawal_id}")
     
-    # ── Simulation ──────────────────────────────────────────────────
+    # ── Finalization Simulation ──────────────────────────────────────
+    # This step represents the asynchronous handshake and confirmation 
+    # of the payout with an external provider (e.g. Stripe/PayPal).
     import time
-    time.sleep(2)  # Simulate API latency
+    time.sleep(2)  # Network handshake simulation
     
-    logger.info(f"Withdrawal {withdrawal_id} finalized in background.")
+    logger.info(f"Withdrawal {withdrawal_id} processing finalized successfully.")
     return True

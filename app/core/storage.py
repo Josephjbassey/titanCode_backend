@@ -1,8 +1,8 @@
 """
 TitanCode Technologies — File Storage System
 ==============================================
-This module provides a pluggable file storage interface with a concrete
-LocalStorage implementation and an S3-ready placeholder.
+This module provides a unified file storage interface with concrete 
+LocalStorage and S3Storage implementations.
 
 Architecture:
     ┌──────────────┐

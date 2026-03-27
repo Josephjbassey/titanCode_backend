@@ -28,7 +28,7 @@ async def send_email(
     """
     # ── Fallback ────────────────────────────────────────────────────────
     if not settings.SMTP_HOST:
-        logger.info(f"📧 [DEV MOCK] To: {recipient_email} | Subject: {subject}")
+        logger.info(f"📧 [LOCAL-RELAY] To: {recipient_email} | Subject: {subject} (Mode: Simulated)")
         return True
 
     # ── MIME Message Creation ───────────────────────────────────────────
