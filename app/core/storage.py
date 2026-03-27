@@ -238,22 +238,33 @@ class LocalStorage(BaseStorage):
         return False
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# S3 CLOUD STORAGE IMPLEMENTATION
+# ═══════════════════════════════════════════════════════════════════════
+
 class S3Storage(BaseStorage):
     """
-    AWS S3 storage backend (placeholder for future implementation).
+    AWS S3 storage backend — used for production cloud hosting.
 
-    To activate S3 storage:
-        1. Install boto3: `pip install boto3`
-        2. Add AWS credentials to .env: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET
-        3. Implement the save/get/delete methods below.
-        4. Change the singleton at the bottom of this file.
+    This implementation allows the application to scale beyond a single 
+    server by storing files in a global Amazon S3 bucket.
 
-    Example .env additions:
-        AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-        AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-        S3_BUCKET=titancode-uploads
-        S3_REGION=us-east-1
+    Requirements:
+        - boto3 library (installed via requirements.txt)
+        - AWS credentials (configured in .env)
     """
+
+    def __init__(self):
+        import boto3
+        from app.core.config import settings
+
+        self.s3 = boto3.client(
+            "s3",
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.S3_REGION,
+        )
+        self.bucket = settings.S3_BUCKET
 
     async def save(
         self,
@@ -261,23 +272,73 @@ class S3Storage(BaseStorage):
         folder: str = "general",
         custom_filename: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Upload a file to S3 (not yet implemented)."""
-        raise NotImplementedError(
-            "S3Storage is not yet implemented. "
-            "Install boto3 and configure AWS credentials to use S3."
-        )
+        """Upload a file to S3."""
+        original_filename = file.filename or "unnamed"
+        if custom_filename:
+            safe_filename = custom_filename
+        else:
+            file_ext = Path(original_filename).suffix
+            safe_filename = f"{uuid.uuid4().hex[:12]}{file_ext}"
+
+        s3_path = f"{folder}/{safe_filename}"
+
+        try:
+            # Upload to S3
+            # We use upload_fileobj which is thread-safe and efficient
+            self.s3.upload_fileobj(
+                file.file,
+                self.bucket,
+                s3_path,
+                ExtraArgs={"ContentType": file.content_type or "application/octet-stream"},
+            )
+        finally:
+            await file.close()
+
+        # Get file size (S3 head object)
+        response = self.s3.head_object(Bucket=self.bucket, Key=s3_path)
+        file_size = response.get("ContentLength", 0)
+
+        logger.info(f"File uploaded to S3: {s3_path} ({file_size} bytes)")
+
+        return {
+            "filename": safe_filename,
+            "original_filename": original_filename,
+            "content_type": file.content_type or "application/octet-stream",
+            "size": file_size,
+            "path": s3_path,
+            "folder": folder,
+        }
 
     async def get(self, file_path: str) -> Optional[str]:
-        """Generate a pre-signed URL for an S3 object (not yet implemented)."""
-        raise NotImplementedError("S3Storage.get() is not yet implemented.")
+        """Generate a pre-signed URL for an S3 object."""
+        try:
+            url = self.s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self.bucket, "Key": file_path},
+                ExpiresIn=3600,  # 1 hour
+            )
+            return url
+        except Exception as e:
+            logger.error(f"Error generating S3 URL: {e}")
+            return None
 
     async def delete(self, file_path: str) -> bool:
-        """Delete an object from S3 (not yet implemented)."""
-        raise NotImplementedError("S3Storage.delete() is not yet implemented.")
+        """Delete an object from S3."""
+        try:
+            self.s3.delete_object(Bucket=self.bucket, Key=file_path)
+            logger.info(f"File deleted from S3: {file_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting S3 object: {e}")
+            return False
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # SINGLETON INSTANCE
 # ═══════════════════════════════════════════════════════════════════════
-# To switch to S3, change this line to: storage = S3Storage()
-storage = LocalStorage()
+from app.core.config import settings
+
+if settings.USE_S3:
+    storage = S3Storage()
+else:
+    storage = LocalStorage()

@@ -32,6 +32,7 @@ from app.schemas.project import (
     Project as ProjectSchema,
     ProjectCreate,
     ProjectUpdate,
+    ProjectRequest,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 
@@ -197,3 +198,35 @@ async def delete_project(
 
     await db.delete(project)
     await db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST /projects/client/request-project — Request a new project (External)
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/client/request-project", response_model=ProjectSchema, status_code=status.HTTP_201_CREATED)
+async def request_project(
+    project_in: ProjectRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Endpoint for external clients to request a new project.
+
+    This differs from /create because it automatically assigns the
+    client_id to the authenticated user submitting the request.
+
+    Args:
+        project_in: Project details (name, description, budget, deadline).
+
+    Returns:
+        ProjectSchema: The newly created "pending" project record.
+    """
+    project = Project(
+        **project_in.model_dump(),
+        client_id=current_user.id,
+        status="pending"
+    )
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return project

@@ -52,6 +52,23 @@ class Settings(BaseSettings):
 
     # ── Database ────────────────────────────────────────────────────────
     DATABASE_URL: str                        # Required — loaded from .env
+    REDIS_URL: str = "redis://redis:6379/0"  # Default for Docker
+
+    # ── AWS S3 Storage (Optional) ──────────────────────────────────────
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    S3_BUCKET: Optional[str] = None
+    S3_REGION: str = "us-east-1"
+    USE_S3: bool = False                     # Toggle between Local and S3
+
+    # ── Email Configuration (SMTP) ──────────────────────────────────────
+    SMTP_TLS: bool = True
+    SMTP_PORT: Optional[int] = 587
+    SMTP_HOST: Optional[str] = None
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    EMAILS_FROM_EMAIL: Optional[str] = "info@titancode.com"
+    EMAILS_FROM_NAME: Optional[str] = "TitanCode Technologies"
 
     # Tell Pydantic to read variables from the .env file
     model_config = SettingsConfigDict(

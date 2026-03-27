@@ -286,6 +286,121 @@ class Transaction(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# REVENUE & PRODUCT MODELS
+# ═══════════════════════════════════════════════════════════════════════
+
+class Product(Base):
+    """
+    Represents an external or internal tool (e.g. SaaS) that generates revenue.
+    Each product has a secret `api_key` used to report earnings automatically.
+
+    Columns:
+        id:               Primary key.
+        name:             Product name (e.g. "TitanChat", "CodeGuard").
+        product_type:     SaaS | Internal Tool | API Service.
+        api_key:          Unique key used by the product to authenticate reports.
+        revenue_endpoint: URL where the product sends revenue data.
+        product_url:      The public URL of the product.
+        created_by:       FK → users.id — the admin who registered the product.
+        created_at:       Timestamp.
+    """
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    product_type = Column(String(100), nullable=True)
+    api_key = Column(String(255), unique=True, index=True, nullable=False)
+    revenue_endpoint = Column(String(500), nullable=True)
+    product_url = Column(String(500), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Relationships
+    revenues = relationship("Revenue", back_populates="product")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REVENUE MODEL
+# ═══════════════════════════════════════════════════════════════════════
+class Revenue(Base):
+    """
+    Tracks incoming revenue reported by external TitanCode products.
+    Each entry is a historical snapshot of earnings.
+
+    Columns:
+        id:          Primary key.
+        product_id:  FK → products.id — which product generated this revenue.
+        amount:      The amount of money generated.
+        source:      Description of the source (e.g. "Subscription", "Ad Revenue").
+        date:        The date the revenue was generated/reported.
+        created_at:  Internal system timestamp.
+    """
+    __tablename__ = "revenues"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    amount = Column(Numeric(12, 2), nullable=False)
+    source = Column(String(255), nullable=True)
+    date = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Relationships
+    product = relationship("Product", back_populates="revenues")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# FINANCIAL MODELS
+# ═══════════════════════════════════════════════════════════════════════
+
+class CompanyWallet(Base):
+    """
+    Represents the central company treasury. All product revenue
+    flows here before being distributed or withdrawn.
+
+    Columns:
+        id:         Primary key.
+        balance:    Total company funds (across all products).
+        currency:   Default currency is "USD".
+        updated_at: Last time the treasury balance was modified.
+    """
+    __tablename__ = "company_wallets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    balance = Column(Numeric(15, 2), default=0.00)
+    currency = Column(String(10), default="USD", nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Withdrawal(Base):
+    """
+    Tracks payout requests from team members/users.
+    Funds are moved from corporate holdings to private accounts.
+
+    Workflow:
+        pending → approved → paid (Success)
+               ↘ rejected (Funds returned to user wallet)
+
+    Columns:
+        id:          Primary key.
+        user_id:     FK → users.id — who is requesting the payout.
+        amount:      The requested amount of money.
+        status:      Current state (pending/approved/etc).
+        bank_info:   Optional override of user's default bank details.
+        reviewed_by: FK → users.id — the admin who processed this.
+        created_at:  Timestamp.
+    """
+    __tablename__ = "withdrawals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    amount = Column(Numeric(12, 2), nullable=False)
+    status = Column(String(50), default="pending", nullable=False)
+    bank_info = Column(Text, nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # MEETING MODEL
 # ═══════════════════════════════════════════════════════════════════════
 class Meeting(Base):

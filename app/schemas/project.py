@@ -26,6 +26,14 @@ class ProjectCreate(ProjectBase):
     pass
 
 
+class ProjectRequest(BaseModel):
+    """Schema for POST /projects/client/request-project — client_id is inferred."""
+    name: str
+    description: Optional[str] = None
+    budget: Decimal = Decimal('0.00')
+    deadline: Optional[datetime] = None
+
+
 class ProjectUpdate(BaseModel):
     """Schema for PUT /projects/update — all fields optional for partial updates."""
     name: Optional[str] = None

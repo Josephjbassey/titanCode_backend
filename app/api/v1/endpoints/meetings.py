@@ -13,6 +13,7 @@ from typing import Any, List
 from datetime import datetime
 
 from app.core.notifications import manager as notification_manager
+from app.core.email import send_email
 from app.db.database import get_db
 from app.db.models import Meeting, User
 from app.schemas.meeting import Meeting as MeetingSchema, MeetingCreate, MeetingUpdate
@@ -46,12 +47,19 @@ async def create_meeting(
         The newly created meeting record.
     """
     # Create the meeting record
-    meeting = Meeting(**meeting_in.model_dump(), created_by=current_user.id)
+    meeting_data = meeting_in.model_dump()
+    
+    # Auto-generate a meeting link if not provided
+    if not meeting_data.get("meeting_link"):
+        # For the MVP, we generate a mock video link (e.g. simulating Agora/WebRTC)
+        meeting_data["meeting_link"] = f"https://meet.titancode.tech/{meeting_data['title'].lower().replace(' ', '-')}-{meeting_in.scheduled_at.strftime('%m%d')}"
+
+    meeting = Meeting(**meeting_data, created_by=current_user.id)
     db.add(meeting)
     await db.commit()
     await db.refresh(meeting)
 
-    # Send real-time notification to the client if assigned
+    # 1. Send WebSocket notification to the client if assigned
     if meeting.client_id:
         await notification_manager.send_personal_message(
             user_id=meeting.client_id,
@@ -66,6 +74,23 @@ async def create_meeting(
                 "meeting_id": meeting.id,
             },
         )
+        
+        # 2. Send EMAIL notification to the client
+        result = await db.execute(select(User).where(User.id == meeting.client_id))
+        client = result.scalars().first()
+        if client and client.email:
+            await send_email(
+                recipient_email=client.email,
+                subject=f"New Meeting Scheduled: {meeting.title}",
+                body=(
+                    f"Hello {client.full_name},\n\n"
+                    f"A new meeting has been scheduled for you: {meeting.title}.\n"
+                    f"Scheduled at: {meeting.scheduled_at.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"Meeting Link: {meeting.meeting_link}\n\n"
+                    "We look forward to seeing you there!\n"
+                    "— TitanCode Technologies Team"
+                )
+            )
 
     return meeting
 
@@ -162,3 +187,37 @@ async def cancel_meeting(
                 "meeting_id": meeting.id,
             },
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GET /meetings/{meeting_id}/join — Join a meeting
+# ═══════════════════════════════════════════════════════════════════════
+@router.get("/{meeting_id}/join")
+async def join_meeting(
+    meeting_id: int,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Get the join link for a meeting and mark it as 'completed' or 'active'.
+    
+    This simulates the hand-off to a WebRTC/Agora session.
+    """
+    result = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+    meeting = result.scalars().first()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if meeting.status == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot join a cancelled meeting")
+
+    # In a real system, we might mark it as 'in_progress' here
+    # meeting.status = "in_progress"
+    # await db.commit()
+
+    return {
+        "meeting_id": meeting.id,
+        "title": meeting.title,
+        "meeting_link": meeting.meeting_link,
+        "message": "Redirecting to your video session..."
+    }
