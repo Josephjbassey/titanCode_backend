@@ -19,12 +19,12 @@ class ProductBase(BaseModel):
     
     Attributes:
         name:             The human-readable name of the product.
-        type:             The category of product (e.g., SaaS, Mobile App, API).
+        product_type:     The category of product (e.g., SaaS, Mobile App, API).
         revenue_endpoint: Optional URL where the product handles billing.
         product_url:      The main public URL of the product.
     """
     name: str = Field(..., example="TitanCRM")
-    type: str = Field(..., example="SaaS")
+    product_type: str = Field(..., example="SaaS")
     revenue_endpoint: Optional[HttpUrl] = None
     product_url: Optional[HttpUrl] = None
 
@@ -43,7 +43,7 @@ class ProductUpdate(BaseModel):
     All fields are optional to allow partial updates.
     """
     name: Optional[str] = None
-    type: Optional[str] = None
+    product_type: Optional[str] = None
     revenue_endpoint: Optional[HttpUrl] = None
     product_url: Optional[HttpUrl] = None
 

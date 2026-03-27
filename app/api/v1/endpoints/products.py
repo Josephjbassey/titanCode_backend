@@ -50,7 +50,7 @@ async def add_product(
     api_key = product_in.api_key or f"tc_{secrets.token_urlsafe(32)}"
     
     product = Product(
-        **product_in.model_dump(exclude={"api_key"}),
+        **product_in.model_dump(exclude={"api_key"}, mode="json"),
         api_key=api_key,
         created_by=current_user.id
     )
