@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     EMAILS_FROM_EMAIL: Optional[str] = "info@titancode.com"
     EMAILS_FROM_NAME: Optional[str] = "TitanCode Technologies"
+    
+    # -- Stripe Configuration --------------------------------------------
+    STRIPE_API_KEY: Optional[str] = None
+    STRIPE_WEBHOOK_SECRET: Optional[str] = None
 
     # Tell Pydantic to read variables from the .env file
     model_config = SettingsConfigDict(

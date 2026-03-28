@@ -33,7 +33,7 @@ from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
 from app.db.database import engine, Base, AsyncSessionLocal
 from app.db.models import User
-from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials
+from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -161,6 +161,7 @@ app.include_router(meetings.router, prefix=f"{settings.API_V1_STR}/meetings", ta
 app.include_router(products.router, prefix=f"{settings.API_V1_STR}/products", tags=["products"])
 app.include_router(revenue.router, prefix=f"{settings.API_V1_STR}/revenue", tags=["revenue"])
 app.include_router(financials.router, prefix=f"{settings.API_V1_STR}/financials", tags=["financials"])
+app.include_router(webhooks.router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
 
 
 # ═══════════════════════════════════════════════════════════════════════
