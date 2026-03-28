@@ -21,49 +21,55 @@ logger = logging.getLogger(__name__)
 @celery_app.task(name="process_payout_calculation")
 def process_payout_calculation(project_id: int):
     """
-    Synchronous wrapper for the async payout calculation logic.
-    Used by Celery workers.
+    Synchronous wrapper for our asynchronous payout logic.
+    
+    Why this matters:
+    Celery is a task queue that usually handles functions synchronously. Since our 
+    database operations use 'asyncio', we need this bridge to run our async 
+    code inside the synchronous Celery worker.
     """
     try:
+        # Step 1: Get the current 'brain' (event loop) of the process.
         loop = asyncio.get_event_loop()
     except RuntimeError:
+        # Step 2: If no brain is active, create a new one.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
     if loop.is_running():
-        # If the loop is already running (e.g. in tests), we return the coroutine
-        # and let the caller await it, or we use a separate thread.
-        # However, for Celery workers, it won't be running.
-        # For tests, we can call the async version directly.
+        # Step 3: If the brain is already thinking (running), safely schedule our task.
         return asyncio.run_coroutine_threadsafe(_process_payout_calculation_async(project_id), loop).result()
     else:
+        # Step 4: Otherwise, run our async task until it finishes.
         return loop.run_until_complete(_process_payout_calculation_async(project_id))
 
 
 async def _process_payout_calculation_async(project_id: int) -> bool:
     """
-    Enterprise-grade payout calculation with strict idempotency,
-    atomic transactions, and detailed audit logging.
+    The Core Financial Engine: Calculates how money is split when a project ends.
+    
+    Beginner Note:
+    We use 'async with' to manage resources like database sessions automatically.
+    This ensures that even if something breaks, the connection to the DB is safely closed.
     """
     logger.info(f"Financial Engine: Starting payout calculation for Project ID {project_id}")
     
     async with AsyncSessionLocal() as session:
-        # 4. Atomic Transaction Block (Constraint #3)
-        # Using session.begin() ensures all-or-nothing consistency.
-        # We start the transaction before the first read to ensure consistency.
         try:
+            # ATOMIC TRANSACTION: 'session.begin()' means "All these changes must happen together, or none at all."
+            # If we update User A's wallet but the server crashes before User B, this rolls back User A too.
             async with session.begin():
-                # 1. Idempotency Check (Constraint #2)
+                
+                # 1. IDEMPOTENCY CHECK: "Don't do the same work twice."
+                # We check if an invoice already exists. If it does, we stop immediately so we don't pay twice!
                 stmt = select(PayoutInvoice).where(PayoutInvoice.project_id == project_id)
                 result = await session.execute(stmt)
                 if result.scalars().first():
-                    logger.warning(
-                        f"Financial Engine: Payout Invoice already exists for Project {project_id}. "
-                        "Aborting to prevent double-funding the team. [IDEMPOTENCY_ABORT]"
-                    )
+                    logger.warning(f"Financial Engine: Project {project_id} was already paid. Skipping. [IDEMPOTENCY]")
                     return False
                 
-                # 2. Fetch Project & Members
+                # 2. FETCH DATA: Get the project and its members from the database.
+                # 'selectinload' is a performance trick to fetch the list of members in one go.
                 stmt = (
                     select(Project)
                     .options(selectinload(Project.members))
@@ -72,63 +78,52 @@ async def _process_payout_calculation_async(project_id: int) -> bool:
                 result = await session.execute(stmt)
                 project = result.scalars().first()
                 
-                if not project:
-                    logger.error(f"Financial Engine: Project {project_id} not found in database. [ERROR]")
-                    return False
-                    
-                if project.status != "completed":
-                    logger.error(
-                        f"Financial Engine: Project {project_id} is in status '{project.status}', "
-                        "not 'completed'. Payouts are only calculated for finished work. [ERROR]"
-                    )
+                if not project or project.status != "completed":
+                    logger.error(f"Financial Engine: Project missing or not complete. Aborting.")
                     return False
                     
                 members = project.members
                 
-                # 3. Calculate Math Split (70% Members, 30% Company) (Constraint #1)
+                # 3. PROFIT SPLIT CALCULATION: (70% to Team, 30% to Company)
+                # We use 'Decimal' instead of 'float' because floats are imprecise for money (e.g., 0.1 + 0.2 != 0.3).
                 total_member_payout = project.budget * Decimal("0.70")
                 
                 if not members:
-                    logger.info(
-                        f"Financial Engine: No members assigned to Project {project_id}. "
-                        "70% split remains in company operations. [AUDIT]"
-                    )
+                    # If no members, the full 70% share is kept by the company as backup.
                     per_member_payout = Decimal("0.00")
                 else:
+                    # Divide the team's share equally among all members.
                     per_member_payout = total_member_payout / Decimal(len(members))
+                    # '.quantize' rounds the value to exactly 2 decimal places (cents).
                     per_member_payout = per_member_payout.quantize(Decimal("0.01"))
                     
-                    logger.info(
-                        f"Financial Engine: Profit split calculated. "
-                        f"Total Budget: {project.budget}, Member Share (70%): {total_member_payout}, "
-                        f"Per Member ({len(members)}): {per_member_payout} [AUDIT]"
-                    )
-
-                # Process each member's wallet credit
+                # 4. DISBURSEMENT: Update member wallets and record the history.
                 for member in members:
+                    # Find each member's personal wallet.
                     stmt = select(Wallet).where(Wallet.user_id == member.id)
                     res = await session.execute(stmt)
                     wallet = res.scalars().first()
                     
                     if not wallet:
-                        logger.warning(f"Financial Engine: User {member.id} missing wallet. Creating new USD wallet. [AUDIT]")
+                        # If they don't have a wallet yet, create one on the fly.
                         wallet = Wallet(user_id=member.id, balance=Decimal("0.00"), currency="USD")
                         session.add(wallet)
-                        await session.flush()
+                        await session.flush() # Ensure it gets an ID before we continue.
                     
+                    # Update the balance.
                     wallet.balance += per_member_payout
                     
+                    # Create a TRANSACTION record: This is the 'receipt' so we can audit later.
                     transaction = Transaction(
                         wallet_id=wallet.id,
                         amount=per_member_payout,
                         transaction_type="credit",
-                        description=f"Automated profit split for Project: {project.name}",
+                        description=f"Profit split for Project: {project.name}",
                         reference_id=str(project.id)
                     )
                     session.add(transaction)
-                    logger.debug(f"Financial Engine: Prepared credit for Wallet {wallet.id} (User {member.id})")
 
-                # 5. Credit Company Share (30%)
+                # 5. COMPANY SHARE: The remaining 30% goes to the client/company wallet.
                 company_share = project.budget - total_member_payout
                 if company_share > 0:
                     stmt = select(Wallet).where(Wallet.user_id == project.client_id)
@@ -141,35 +136,26 @@ async def _process_payout_calculation_async(project_id: int) -> bool:
                         await session.flush()
                     
                     company_wallet.balance += company_share
-                    
-                    company_tx = Transaction(
-                        wallet_id=company_wallet.id,
-                        amount=company_share,
-                        transaction_type="credit",
-                        description=f"Company profit share (30%) for Project: {project.name}",
+                    session.add(Transaction(
+                        wallet_id=company_wallet.id, amount=company_share,
+                        transaction_type="credit", description=f"Company profit share (30%)",
                         reference_id=str(project.id)
-                    )
-                    session.add(company_tx)
-                    logger.info(f"Financial Engine: Credited Company Share ({company_share}) to Wallet {company_wallet.id}")
+                    ))
 
-                # Generate the frozen PayoutInvoice record
-                invoice = PayoutInvoice(
+                # 6. INVOICE GENERATION: Create a final document summarizes the whole payout.
+                session.add(PayoutInvoice(
                     project_id=project.id,
                     total_payout_amount=project.budget,
                     team_payout_amount=total_member_payout,
                     company_payout_amount=company_share,
                     is_approved=False
-                )
-                session.add(invoice)
+                ))
             
-            logger.info(f"Financial Engine: DB Commit Success. Payout for Project {project_id} locked. [SUCCESS]")
+            # If we reached here without errors, 'session.begin()' will commit (save) all changes to the DB.
+            logger.info(f"Financial Engine: Success. Payout for Project {project_id} finalized.")
             return True
             
         except Exception as e:
-            logger.error(
-                f"Financial Engine: CRITICAL FAIL on Project {project_id}. "
-                f"Transaction rolling back. Error: {str(e)} [ROLLBACK]"
-            )
-            # Rollback is automatic with `async with session.begin()` on exception,
-            # but we re-raise for visibility.
+            # If ANYTHING went wrong, the entire session is rolled back automatically.
+            logger.error(f"Financial Engine: CRITICAL FAIL on Project {project_id}. Transaction rolled back.")
             raise

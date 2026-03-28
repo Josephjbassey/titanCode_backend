@@ -161,6 +161,7 @@ app.include_router(meetings.router, prefix=f"{settings.API_V1_STR}/meetings", ta
 app.include_router(products.router, prefix=f"{settings.API_V1_STR}/products", tags=["products"])
 app.include_router(revenue.router, prefix=f"{settings.API_V1_STR}/revenue", tags=["revenue"])
 app.include_router(financials.router, prefix=f"{settings.API_V1_STR}/financials", tags=["financials"])
+# This router handles specialized webhooks, like payment success notifications from Stripe.
 app.include_router(webhooks.router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
 
 

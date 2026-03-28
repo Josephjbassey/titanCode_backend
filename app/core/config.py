@@ -75,7 +75,10 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: Optional[str] = "info@titancode.com"
     EMAILS_FROM_NAME: Optional[str] = "TitanCode Technologies"
     
-    # -- Stripe Configuration --------------------------------------------
+    # ── Stripe Configuration ────────────────────────────────────────────
+    # These are loaded from your .env file.
+    # STRIPE_API_KEY: Used to actually talk to Stripe (like a password).
+    # STRIPE_WEBHOOK_SECRET: Used to verify that messages from Stripe are real.
     STRIPE_API_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None
 
