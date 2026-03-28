@@ -7,9 +7,9 @@ Status lifecycle: pending → active → completed | cancelled
 """
 
 from pydantic import BaseModel
-from typing import Optional
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional, List
 
 
 class ProjectBase(BaseModel):
@@ -23,7 +23,7 @@ class ProjectBase(BaseModel):
 
 class ProjectCreate(ProjectBase):
     """Schema for POST /projects/create — inherits all base fields."""
-    pass
+    member_ids: Optional[List[int]] = None
 
 
 class ProjectRequest(BaseModel):
@@ -41,6 +41,7 @@ class ProjectUpdate(BaseModel):
     budget: Optional[Decimal] = None
     deadline: Optional[datetime] = None
     status: Optional[str] = None            # pending | active | completed | cancelled
+    member_ids: Optional[List[int]] = None
 
 
 class ProjectInDBBase(ProjectBase):
@@ -54,4 +55,4 @@ class ProjectInDBBase(ProjectBase):
 
 class Project(ProjectInDBBase):
     """Public Project schema returned in API responses."""
-    pass
+    member_ids: Optional[List[int]] = None

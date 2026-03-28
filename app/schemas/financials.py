@@ -51,3 +51,26 @@ class Withdrawal(WithdrawalBase):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PAYOUT INVOICE SCHEMAS
+# ═══════════════════════════════════════════════════════════════════════
+
+class PayoutInvoiceBase(BaseModel):
+    """Fields for an internal project payout invoice."""
+    project_id: int
+    total_payout_amount: Decimal = Field(..., decimal_places=2)
+
+class PayoutInvoiceCreate(PayoutInvoiceBase):
+    """Schema for background task to create an invoice."""
+    pass
+
+class PayoutInvoice(PayoutInvoiceBase):
+    """The public representation of a payout invoice."""
+    id: int
+    is_approved: bool
+    processed_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

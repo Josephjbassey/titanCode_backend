@@ -21,6 +21,9 @@ __pycache__/
 # Database
 *.sqlite3
 
+# Artifacts
+artifacts/
+
 # OS generated files
 .DS_Store
 Thumbs.db

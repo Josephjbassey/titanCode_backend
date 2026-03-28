@@ -59,3 +59,38 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+@pytest_asyncio.fixture
+async def db_session():
+    """Provide a fresh database session for a test function."""
+    async with TestSessionLocal() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def admin_token_headers(client: AsyncClient):
+    """Provide headers with a valid admin JWT token."""
+    response = await client.post("/api/v1/auth/login", data={
+        "username": settings.FIRST_SUPERUSER,
+        "password": settings.FIRST_SUPERUSER_PASSWORD,
+    })
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def user_token_headers(client: AsyncClient):
+    """Provide headers with a valid regular user JWT token."""
+    # Register a temporary user
+    email = f"test_{os.urandom(4).hex()}@test.com"
+    await client.post("/api/v1/auth/register", json={
+        "full_name": "Test User",
+        "email": email,
+        "password": "SecurePass123!",
+    })
+    # Login
+    response = await client.post("/api/v1/auth/login", data={
+        "username": email,
+        "password": "SecurePass123!",
+    })
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}

@@ -35,6 +35,7 @@ from app.schemas.project import (
     ProjectRequest,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.tasks.financials import process_payout_calculation
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -66,11 +67,21 @@ async def create_project(
     Returns:
         ProjectSchema: The newly created project record.
     """
-    # Unpack the Pydantic schema into an SQLAlchemy model and save
-    project = Project(**project_in.model_dump())
+    # Step 1: Unpack initial project data (exclude M2M fields)
+    project_data = project_in.model_dump(exclude={"member_ids"})
+    project = Project(**project_data)
+    
+    # Step 2: Handle M2M Member Assignment
+    if project_in.member_ids:
+        res = await db.execute(select(User).where(User.id.in_(project_in.member_ids)))
+        project.members = res.scalars().all()
+
     db.add(project)
     await db.commit()
-    await db.refresh(project)  # Reload to get auto-generated fields (id, created_at)
+    await db.refresh(project, attribute_names=["members"])
+    
+    # Step 3: Populate member_ids for the response schema
+    project.member_ids = [m.id for m in project.members]
     return project
 
 
@@ -167,13 +178,31 @@ async def update_project(
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Step 2: Apply only the fields that were sent (partial update)
-    update_data = project_in.model_dump(exclude_unset=True)
+    update_data = project_in.model_dump(exclude_unset=True, exclude={"member_ids"})
+    
+    # Financial Logic: Check if status is transitioning to COMPLETED
+    trigger_payout = False
+    if project_in.status == "completed" and project.status != "completed":
+        trigger_payout = True
+
     for field, value in update_data.items():
         setattr(project, field, value)
+        
+    # Step 3: Update Members (M2M) if provided
+    if project_in.member_ids is not None:
+        res = await db.execute(select(User).where(User.id.in_(project_in.member_ids)))
+        project.members = res.scalars().all()
 
-    # Step 3: Save changes
+    # Step 4: Save changes
     await db.commit()
-    await db.refresh(project)
+    await db.refresh(project, attribute_names=["members"])
+    
+    # Step 5: Trigger Background Payout Task (Constraint #2 compliance)
+    if trigger_payout:
+        process_payout_calculation.delay(project.id)
+
+    # Populate member_ids for the response
+    project.member_ids = [m.id for m in project.members]
     return project
 
 
@@ -236,5 +265,5 @@ async def request_project(
     )
     db.add(project)
     await db.commit()
-    await db.refresh(project)
+    await db.refresh(project, attribute_names=["members"])
     return project

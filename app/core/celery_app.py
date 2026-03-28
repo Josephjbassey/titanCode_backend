@@ -18,7 +18,7 @@ celery_app = Celery(
     "titancode_worker",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.core.tasks"]
+    include=["app.core.tasks", "app.tasks.financials"]
 )
 
 # ── Hardening & Best Practices ────────────────────────────────────────

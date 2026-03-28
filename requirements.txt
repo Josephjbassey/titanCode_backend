@@ -36,3 +36,4 @@ aiosmtplib>=3.0.1                  # Async SMTP client for sending emails
 # ── Production Hardening ──────────────────────────────────────────────
 slowapi>=0.1.9                     # Rate limiting (brute-force/abuse protection)
 python-json-logger>=2.0.0          # Structured JSON logging for production
+gunicorn>=21.2.0                   # Production WSGI/ASGI server

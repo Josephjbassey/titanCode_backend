@@ -123,8 +123,21 @@ async def get_my_wallet(
 async def get_user_wallet(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(allow_admin),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
+    """
+    Get a specific user's wallet with history.
+    
+    BOLA PROTECTION (Constraint #4):
+    - CEO/Admin can see ANY wallet.
+    - Regular users can ONLY see their OWN wallet.
+    """
+    # Authorization logic
+    if current_user.role not in ["CEO", "Admin"] and current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: You can only access your own wallet details"
+        )
     """
     Get any user's wallet with their full transaction history.
     Restricted to CEO and Admin for financial oversight.
@@ -238,8 +251,28 @@ async def create_transaction(
 async def get_transaction_history(
     wallet_id: int,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(allow_admin),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
+    """
+    Get the full transaction history for a specific wallet.
+    
+    BOLA PROTECTION (Constraint #4):
+    - CEO/Admin can see ANY wallet history.
+    - Regular users can ONLY see their OWN wallet history.
+    """
+    # 1. Fetch the wallet to verify ownership
+    res = await db.execute(select(Wallet).where(Wallet.id == wallet_id))
+    wallet = res.scalars().first()
+    
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+
+    # 2. Authorization logic
+    if current_user.role not in ["CEO", "Admin"] and current_user.id != wallet.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: You can only access your own transaction history"
+        )
     """
     Get the full transaction history for a specific wallet.
     Results are ordered newest-first.

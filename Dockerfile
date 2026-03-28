@@ -44,7 +44,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Step 6: Copy the rest of the application code
 COPY . .
 
-# Step 7: Start the FastAPI server with Uvicorn
-# --host 0.0.0.0 → Listen on all network interfaces (required inside Docker)
-# --port 8000    → Serve on port 8000 (mapped to host in docker-compose.yml)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Step 7: Start the FastAPI server with Gunicorn (Production)
+# We use Gunicorn as a process manager to run multiple Uvicorn workers.
+# -w 4         → Run 4 worker processes (adjust based on CPU cores)
+# -k uvicorn.workers.UvicornWorker → Use the Uvicorn worker class
+# --bind 0.0.0.0:8000 → Listen on all interfaces
+CMD ["gunicorn", "main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]

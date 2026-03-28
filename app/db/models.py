@@ -19,7 +19,7 @@ Relationships:
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Numeric, DateTime
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Numeric, DateTime, Table, Boolean
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -147,6 +147,18 @@ class Application(Base):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# PROJECT & MEMBERS ASSOCIATION
+# ═══════════════════════════════════════════════════════════════════════
+
+project_members = Table(
+    "project_members",
+    Base.metadata,
+    Column("project_id", Integer, ForeignKey("projects.id"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # PROJECT MODEL
 # ═══════════════════════════════════════════════════════════════════════
 class Project(Base):
@@ -180,6 +192,9 @@ class Project(Base):
 
     # One-to-many: a project has many tasks
     tasks = relationship("Task", back_populates="project")
+    
+    # Many-to-many: a project has many assigned members
+    members = relationship("User", secondary=project_members, backref="assigned_projects")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -433,3 +448,38 @@ class Meeting(Base):
     client_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     status = Column(String(50), default="scheduled", nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PAYOUT INVOICE MODEL
+# ═══════════════════════════════════════════════════════════════════════
+class PayoutInvoice(Base):
+    """
+    Represents an internal invoice for project profit distribution.
+    
+    This record is created when a project is COMPLETED. It calculates
+    the 70/30 split between team members and company operations.
+    
+    Idempotency: One PayoutInvoice per Project (unique constraint on project_id).
+    
+    Columns:
+        id:                  Primary key.
+        project_id:          FK → projects.id — unique to prevent double-payout.
+        total_payout_amount: The 70% fraction distributed to members.
+        is_approved:         Admin toggle before final record locking.
+        processed_at:        Timestamp of when the payout was finalized.
+        created_at:          Initial creation timestamp.
+    """
+    __tablename__ = "payout_invoices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), unique=True, nullable=False)
+    total_payout_amount = Column(Numeric(12, 2), nullable=False)
+    team_payout_amount = Column(Numeric(12, 2), nullable=False)
+    company_payout_amount = Column(Numeric(12, 2), nullable=False)
+    is_approved = Column(Boolean, default=False, nullable=False)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Relationships
+    project = relationship("Project", backref="payout_invoice")

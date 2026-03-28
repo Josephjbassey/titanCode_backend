@@ -76,20 +76,24 @@ services:
       - "6379:6379"
 
   # ── Celery Worker ───────────────────────────────────────────────────
-  # This container runs the actual background logic defined in app.core.tasks.
+  # This container runs the actual background logic defined in app.tasks.financials.
   celery_worker:
     build: .
     container_name: titancode_worker
     command: celery -A app.core.celery_app worker --loglevel=info
     volumes:
       - .:/app
+    env_file:
+      - .env
     environment:
+      # Override URLs for the container network
       - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/titancode
       - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=PlaceholderKeyForWorker
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
 # ── Named Volumes ───────────────────────────────────────────────────────
 # Docker manages these volumes — they persist data between container restarts.

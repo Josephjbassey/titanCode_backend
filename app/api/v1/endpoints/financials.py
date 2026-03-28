@@ -12,9 +12,17 @@ from typing import Any, List
 from decimal import Decimal
 
 from app.db.database import get_db
-from app.db.models import CompanyWallet, Withdrawal, User, Wallet
-from app.schemas.financials import CompanyWallet as WalletSchema, Withdrawal as WithdrawalSchema, WithdrawalCreate, WithdrawalAction
+from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, utcnow
+from app.schemas.financials import (
+    CompanyWallet as WalletSchema, 
+    Withdrawal as WithdrawalSchema, 
+    WithdrawalCreate, 
+    WithdrawalAction,
+    PayoutInvoice as PayoutInvoiceSchema
+)
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.rate_limiter import limiter
+from starlette.requests import Request
 
 # Create the router
 router = APIRouter()
@@ -155,3 +163,42 @@ async def process_withdrawal(
     await db.commit()
     await db.refresh(withdrawal)
     return withdrawal
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST /payouts/{id}/approve — Approve Project Payout (Admin)
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/payouts/{invoice_id}/approve", response_model=PayoutInvoiceSchema)
+@limiter.limit("5/minute")
+async def approve_payout(
+    request: Request,
+    invoice_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(allow_admins),
+) -> Any:
+    """
+    Approve an internal project payout invoice (CEO/Admin only).
+    
+    This is the "Safety Net" before funds are considered 'locked' 
+    for bank transfer in future phases.
+    
+    Constraints:
+    - Strictly protected by Admin RBAC.
+    - Rate limited to 5 requests per minute per IP.
+    """
+    result = await db.execute(select(PayoutInvoice).where(PayoutInvoice.id == invoice_id))
+    invoice = result.scalars().first()
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Payout invoice not found")
+        
+    if invoice.is_approved:
+        raise HTTPException(status_code=400, detail="Payout invoice is already approved")
+
+    # Flip the approval bit
+    invoice.is_approved = True
+    invoice.processed_at = utcnow() # From db.models
+    
+    await db.commit()
+    await db.refresh(invoice)
+    return invoice
