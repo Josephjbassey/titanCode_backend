@@ -121,6 +121,14 @@ async def get_project(
     project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # BOLA CHECK: Only owner/admin or the assigned client can view
+    if _current_user.role not in ["CEO", "Admin"] and project.client_id != _current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You do not have permission to access this project",
+        )
+
     return project
 
 

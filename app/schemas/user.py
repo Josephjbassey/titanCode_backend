@@ -35,8 +35,6 @@ class UserBase(BaseModel):
     experience_years: int = 0
     skills: Optional[str] = None
     tools: Optional[str] = None
-    bank_name: Optional[str] = None
-    bank_account_number: Optional[str] = None
 
 
 class UserCreate(UserBase):
@@ -48,6 +46,8 @@ class UserCreate(UserBase):
     and stored as `password_hash` in the database.
     """
     password: str
+    bank_name: Optional[str] = None
+    bank_account_number: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -91,10 +91,11 @@ class UserInDBBase(UserBase):
 
 
 class User(UserInDBBase):
-    """
-    The public User schema returned in API responses.
-
-    Inherits everything from UserInDBBase. Extend this class
-    if you need to add computed fields or exclude sensitive data.
-    """
+    """Public user schema (no sensitive fields)."""
     pass
+
+
+class UserPrivate(User):
+    """Private user schema (includes wallet/bank info for the owner/admin)."""
+    bank_name: Optional[str] = None
+    bank_account_number: Optional[str] = None

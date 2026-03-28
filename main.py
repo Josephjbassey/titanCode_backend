@@ -68,7 +68,7 @@ async def seed_default_admin():
             admin = User(
                 full_name="TitanCode Admin",
                 email="admin@titancode.com",
-                password_hash=get_password_hash("TitanCodeAdmin123!"),
+                password_hash=get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
                 role="CEO",
                 status="approved",
             )

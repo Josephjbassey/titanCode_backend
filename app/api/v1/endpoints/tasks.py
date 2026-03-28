@@ -24,6 +24,7 @@ API Routes (all prefixed with /api/v1/tasks):
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from typing import Any, List
 
 from app.db.database import get_db
@@ -114,10 +115,26 @@ async def get_task(
     Raises:
         HTTPException 404: If no task exists with the given ID.
     """
-    result = await db.execute(select(Task).where(Task.id == task_id))
+    # Step 1: Find the task (eagerly load the project for the BOLA check below)
+    stmt = (
+        select(Task)
+        .options(selectinload(Task.project))
+        .where(Task.id == task_id)
+    )
+    result = await db.execute(stmt)
     task = result.scalars().first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # BOLA CHECK: Only Admin/CEO or the assigned user or the project's client can view
+    if _current_user.role not in ["CEO", "Admin"] and \
+       task.assigned_user != _current_user.id and \
+       (task.project and task.project.client_id != _current_user.id):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You do not have permission to access this task",
+        )
+
     return task
 
 
@@ -149,8 +166,13 @@ async def update_task(
     Raises:
         HTTPException 404: If no task exists with the given ID.
     """
-    # Step 1: Find the task
-    result = await db.execute(select(Task).where(Task.id == task_id))
+    # Step 1: Find the task (eagerly load the project for the BOLA check below)
+    stmt = (
+        select(Task)
+        .options(selectinload(Task.project))
+        .where(Task.id == task_id)
+    )
+    result = await db.execute(stmt)
     task = result.scalars().first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -188,7 +210,13 @@ async def delete_task(
     Raises:
         HTTPException 404: If no task exists with the given ID.
     """
-    result = await db.execute(select(Task).where(Task.id == task_id))
+    # Step 1: Find the task (eagerly load the project for the BOLA check below)
+    stmt = (
+        select(Task)
+        .options(selectinload(Task.project))
+        .where(Task.id == task_id)
+    )
+    result = await db.execute(stmt)
     task = result.scalars().first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

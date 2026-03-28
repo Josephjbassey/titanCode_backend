@@ -16,6 +16,7 @@ Note: Uses UUID-based emails so each test run is idempotent.
 import uuid
 import pytest
 from httpx import AsyncClient
+from app.core.config import settings
 
 
 def unique_email(prefix: str = "test") -> str:
@@ -169,8 +170,8 @@ async def test_admin_can_list_users(client: AsyncClient):
     """Test that the CEO admin can list all users."""
     # Login as the seeded admin
     response = await client.post("/api/v1/auth/login", data={
-        "username": "admin@titancode.com",
-        "password": "TitanCodeAdmin123!",
+        "username": settings.FIRST_SUPERUSER,
+        "password": settings.FIRST_SUPERUSER_PASSWORD,
     })
     token = response.json()["access_token"]
 

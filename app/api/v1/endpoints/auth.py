@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.core import security
 from app.db.database import get_db
 from app.db.models import User
-from app.schemas.user import UserCreate, User as UserSchema
+from app.schemas.user import UserCreate, User as UserSchema, UserPrivate
 from app.schemas.token import Token, TokenPayload
 from app.core.rate_limiter import limiter
 
@@ -290,7 +290,7 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)) 
 # ═══════════════════════════════════════════════════════════════════════
 # ENDPOINT: Get current user's profile
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/profile", response_model=UserSchema)
+@router.get("/profile", response_model=UserPrivate)
 async def read_current_user(
     current_user: User = Depends(get_current_active_user),
 ) -> Any:

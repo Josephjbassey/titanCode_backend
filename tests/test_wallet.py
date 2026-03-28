@@ -13,14 +13,15 @@ Test Coverage:
 
 import pytest
 from httpx import AsyncClient
+from app.core.config import settings
 
 
 # ── Helper: Login as admin ─────────────────────────────────────────────
 async def login_as_admin(client: AsyncClient):
     """Login as the seeded CEO admin and return the auth token."""
     response = await client.post("/api/v1/auth/login", data={
-        "username": "admin@titancode.com",
-        "password": "TitanCodeAdmin123!",
+        "username": settings.FIRST_SUPERUSER,
+        "password": settings.FIRST_SUPERUSER_PASSWORD,
     })
     return response.json().get("access_token")
 

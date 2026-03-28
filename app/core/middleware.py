@@ -58,7 +58,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         start_time = time.perf_counter()
 
         # Get client IP (may be forwarded by a proxy)
-        client_ip = request.client.host if request.client else "unknown"
+        forwarded = request.headers.get("X-Forwarded-For")
+        client_ip = forwarded.split(",")[0] if forwarded else (request.client.host if request.client else "unknown")
 
         # ── Call the actual endpoint ───────────────────────────────────
         try:

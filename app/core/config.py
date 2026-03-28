@@ -11,7 +11,7 @@ Usage:
 """
 
 from typing import List, Union, Optional
-from pydantic import field_validator
+from pydantic import field_validator, EmailStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,7 +32,12 @@ class Settings(BaseSettings):
                                     (e.g. postgresql+asyncpg://user:pass@host/db).
     """
 
-    PROJECT_NAME: str = "TitanCode Technologies API"
+    PROJECT_NAME: str = "TitanCode Technologies Backend Service"
+
+    # Admin Seeding
+    FIRST_SUPERUSER: EmailStr = "admin@titancode.com"
+    FIRST_SUPERUSER_PASSWORD: str = "TitanCodeAdmin123!"  # Default for dev, override in .env
+
     API_V1_STR: str = "/api/v1"
 
     # ── Security ────────────────────────────────────────────────────────
