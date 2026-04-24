@@ -1,108 +1,52 @@
-# 📊 TitanCode Technologies: Project Manager's Guide
+# 📊 TitanCode Technologies: PM Guide (Manual Client Model)
 
-This document provides a complete overview of the TitanCode ecosystem, designed for Project Managers to understand user flows, role responsibilities, and the underlying technical architecture.
+This guide reflects the decision to **scrap the Client Dashboard** and move to a manual, HR-led onboarding and communication model.
 
 ---
 
 ## 1. Role Definitions & Permissions Matrix
 
-The platform uses **Role-Based Access Control (RBAC)**. Every user is assigned a specific role that dictates their visibility and action limits.
-
 | Role | Responsibility | Key Permissions |
 | :--- | :--- | :--- |
-| **CEO** | Global oversight | Full access; Delete anything; Manage all wallets. |
-| **Admin** | System operations | Manage users; Approve withdrawals; Register external products. |
-| **Manager** | Department lead | Approve applications; Create/Assign projects & tasks; Schedule meetings. |
-| **Member** | Project execution | View assigned tasks; Update work status; Request payouts. |
-| **Client** | Service hiring | Request projects; Participate in meetings; Pay for services. |
-| **Applicant**| Waiting to join | View departments; Submit membership application. |
+| **CEO/Admin** | Oversight & Payouts | Full access; Manage global treasury. |
+| **HR** | Manual Onboarding | Monitor "Hire Us" leads; Contact clients externally. |
+| **Manager** | Internal Lead | Setup projects; Assign tasks; Update status. |
+| **Member** | Execution | Complete tasks; Earn profit shares. |
 
 ---
 
-## 2. The Client Journey: Navigation & Access
+## 2. The Manual Client Flow (How it Works)
 
-### **A. Onboarding**
-1.  **Sign-up**: The client registers at `/auth/register`.
-2.  **Activation**: An Admin validates the client and upgrades their role from `Member` to `Client` via the User Update endpoint.
+### **A. The "Hire Us" Lead**
+Instead of a complex CRM, we use a single point of entry for clients:
+*   **The Form**: A simple submission endpoint (`/api/v1/projects/client/request-project`).
+*   **The Notification**: HR is alerted to the new lead.
 
-### **B. Navigating the Dashboard**
-*   **Project Request**: Clients access the "Hire Us" section where they submit a **Project Request** (Budget, Description, Deadline).
-*   **Meeting Room**: Clients see a list of scheduled video/audio consultations. They receive a "Join" link when a session is active.
-*   **Active Projects**: A dedicated view showing the progress bar of their active projects and a list of high-level task completions.
-*   **Billing & Payments**:
-    *   Clients see "Invoices" for their projects.
-    *   Clicking **"Pay Now"** redirects them to a Stripe Checkout page.
-    *   Once paid, the project is marked as "Completed" in real-time via Webhooks.
+### **B. External Communication**
+The Project Manager and HR communicate with the client through:
+*   **WhatsApp / Telegram**: For daily updates.
+*   **Email**: For formal quotes and meeting invites.
+*   **Stripe Links**: For project payments.
 
 ---
 
-## 3. The Core Business Workflow
-
-### **Phase 1: Sales & Onboarding**
-*   **User Flow**: Applicant → Registration → Application Submission → Manager Review → Approved Member.
-*   **Client Flow**: Registration → Admin Approval → Project Request submission.
-
-### **Phase 2: Project Management**
-1.  **Discovery**: Manager sees a new project request and schedules a **Meeting**.
-2.  **Assignment**: Manager sets project to "Active" and assigns a **Team** (Members) and a **Lead** (Manager).
-3.  **Execution**: Manager breaks down the project into **Tasks** and assigns them to Members.
-4.  **Notifications**: Every assignment triggers a **WebSocket notification** to the Member's dashboard and an **Email** to their inbox.
-
-### **Phase 3: Financial Settlement (The "Engine")**
-*   **Completion**: When the project is finished, the Client pays.
-*   **Payout Logic**: The system automatically executes the **70/30 split**:
-    *   **70%** distributed to the working team's personal wallets.
-    *   **30%** retained in the Company Treasury.
-*   **Withdrawal**: Members can request their funds, which an Admin then approves and processes.
+## 3. Why this Works (PM Benefits)
+1.  **Reduced Complexity**: We don't need to maintain a secure client-facing dashboard.
+2.  **Personal Touch**: HR/Managers build direct relationships with clients via WhatsApp.
+3.  **Internal Efficiency**: The system still automates the "hard parts"—task tracking, project accounting, and the 70/30 profit split distribution.
 
 ---
 
-## 4. Technical Architecture: How the Codebase Works
+## 4. Technical Workflow Summary
+*   **Internal tracking continues**: Even if the client doesn't see it, Managers MUST use the system to track tasks and projects to ensure the **Profit Split Engine** works correctly.
+*   **Stripe is the Trigger**: Manual communication ends with a Stripe link. When the client pays, the system handles the rest (Member credits, Company share).
 
-The codebase is built on a **Modular Micro-Services** approach using the following stack:
+## 7. HR Workflow: Manual Lead Processing
 
-### **A. The API Layer (FastAPI)**
-*   Located in `/app/api/v1/endpoints/`.
-*   Each file represents a business domain (e.g., `projects.py`, `wallets.py`).
-*   It handles security, input validation, and communication with the database.
+HR plays the critical role of "Gatekeeper" and "Concierge" in the new manual model.
 
-### **B. The Database (PostgreSQL & SQLAlchemy)**
-*   Located in `/app/db/`.
-*   Stores everything: User profiles, financial transactions, project statuses, and encrypted password hashes.
-
-### **C. The Task Engine (Celery & Redis)**
-*   Located in `/app/tasks/`.
-*   Handles **background processing** that is too slow for the main API (e.g., calculating complex profit splits, sending bulk emails, processing Stripe webhooks).
-*   **Redis** acts as the "messenger" between the API and the Task Engine.
-
-### **D. Real-time Communication (WebSockets)**
-*   Located in `/app/core/notifications.py`.
-*   Provides instant updates. When a Manager clicks "Approve", the Member's screen updates immediately without a refresh.
-
----
-
-## 5. Summary for PMs
-1.  **Trust the Status**: A project only triggers payouts when its status hits `completed`.
-2.  **RBAC is Key**: If a user can't see something, check their `role` in the `users` table.
-3.  **Auditable**: Every cent moved in the system is recorded in the `transactions` table—never delete rows, always "soft-delete" or update status.
-
-## 6. Detailed Client Dashboard Navigation (UI Walkthrough)
-
-To assist with UI/UX planning, here is how a Client navigates the platform:
-
-1. **Top Navigation Bar**:
-   - **Dashboard**: Overview of total projects and spending.
-   - **Hire Services**: Button to trigger the Project Request form.
-   - **Meetings**: Calendar view of scheduled sessions.
-   - **Invoices**: List of pending and paid invoices.
-
-2. **Project Detail View**:
-   - **Progress Tracker**: Visual indicator of project status (Pending -> Active -> Completed).
-   - **Team List**: Names and roles (but not personal contact info) of the assigned TitanCode members.
-   - **Deliverables**: Links to files uploaded by the team (via the `/files` module).
-
-3. **Interaction Flow**:
-   - **Step 1**: Client fills in a form (Name, Description, Budget).
-   - **Step 2**: Client receives a notification when a Manager is assigned.
-   - **Step 3**: Client clicks "Join Meeting" directly from their dashboard.
-   - **Step 4**: Upon project completion, a "Pay & Finalize" button appears, linking to Stripe.
+1.  **Lead Reception**: HR receives an automated email for every new submission via the "Hire Us" form.
+2.  **Initial Contact**: HR reaches out to the client within 24 hours via **WhatsApp** (using the phone number from the user profile) or **Email**.
+3.  **Qualification**: HR assesses the client's needs and budget.
+4.  **Meeting Coordination**: HR coordinates with the relevant Department Manager to schedule a manual meeting (Zoom/Meet/WhatsApp Call).
+5.  **Project Handoff**: Once the deal is closed, HR hands the project details to the Manager, who then activates the project internally in the TitanCode platform.

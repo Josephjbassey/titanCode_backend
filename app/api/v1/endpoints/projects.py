@@ -36,6 +36,7 @@ from app.schemas.project import (
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.tasks.financials import process_payout_calculation
+from app.core.email import send_email
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -266,4 +267,21 @@ async def request_project(
     db.add(project)
     await db.commit()
     await db.refresh(project, attribute_names=["members"])
+
+    # ── HR NOTIFICATION ──────────────────────────────────────────────────
+    # Based on PM requirements for manual onboarding, we notify HR of the lead.
+    # In production, settings.HR_EMAIL should be used.
+    await send_email(
+        recipient_email="hr@titancode.tech",
+        subject=f"New Hire Us Lead: {project.name}",
+        body=(
+            f"Hello HR Team,\n\n"
+            f"A new project request has been submitted by {current_user.full_name} ({current_user.email}).\n\n"
+            f"Project: {project.name}\n"
+            f"Budget: ${project.budget}\n"
+            f"Description: {project.description}\n\n"
+            "Please contact the client via WhatsApp or Email to begin the manual onboarding process."
+        )
+    )
+
     return project
