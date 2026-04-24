@@ -1,52 +1,49 @@
-# TitanCode Technologies: User & Onboarding Flows (Manual Client Model)
+# TitanCode Technologies: User & Onboarding Flows (Unified Manual Model)
 
-This document outlines the end-to-end lifecycle for every role within the platform. **Note: Based on PM requirements, the Client Dashboard has been removed in favor of a manual HR-led onboarding process.**
+This document outlines the "Zero-Friction" onboarding and project lifecycle.
 
 ---
 
-## 1. Onboarding Flows (By Role)
+## 1. The "Zero-Friction" Client Onboarding (Unified Form)
+
+To maximize conversion, we have combined Project Discovery and Account Registration into a single step.
+
+1.  **The Entry Point**: A potential client visits the public "Hire Us" page.
+2.  **The Unified Form**: The client fills out a single form with:
+    *   **Project Details**: Name, Budget, Description.
+    *   **Contact Details**: Full Name, Email, Phone.
+3.  **Background Automation**: Upon submission (`POST /api/v1/projects/client/request-project`):
+    *   The system checks if the email is already in the database.
+    *   If new, it **silently creates a 'Client' account** in the background.
+    *   A **pending Project** is created and linked to this account.
+4.  **HR Notification**: HR is immediately alerted via email with the lead details.
+5.  **Manual Outreach**: HR contacts the client via **WhatsApp** or **Email** to discuss the project. No dashboard login is required from the client.
+
+---
+
+## 2. Team Onboarding Flows
 
 ### 👑 CEO / Admin
-*   **Onboarding**: Bootstrapped automatically or promoted by the CEO.
-*   **Responsibility**: Managing departments, approving high-level withdrawals, and overseeing the "Company Wallet."
+*   Manages the platform, departments, and high-level financial approvals.
 
-### 💼 Manager (Department Lead)
-*   **Promotion**: Updated by Admin/CEO.
-*   **Responsibility**: Receives leads from HR, creates project records manually, and assigns members/tasks.
+### 💼 Manager
+*   Sets up internal project tasks, assigns members, and handles technical communication with the client (externally).
 
-### 👥 HR (New Role: Manual Onboarding Lead)
-*   **Responsibility**: Monitors the "Hire Us" form submissions, contacts potential clients via Email/WhatsApp, and facilitates the manual onboarding of projects into the system.
+### 👥 HR
+*   The primary point of contact for leads. Responsible for moving a client from "Form Submitted" to "Project Active."
 
-### 💻 Member / Applicant (The Talent)
-*   **Step 1: Registration**: Signs up via `POST /api/v1/auth/register`.
-*   **Step 2: Application**: Submits GitHub/Portfolio via `POST /api/v1/applications/apply`.
-*   **Step 3: Approval**: Manager approves application, activating the user and assigning them to a department.
-
-### 🤝 Client (Manual "Hire Us" Flow)
-*   **No Dashboard Access**: Clients do not log in to a dashboard for project management.
-*   **Onboarding**:
-    1. Client fills out a public "Hire Us" form (Project Request).
-    2. HR receives the request and contacts the Client via WhatsApp/Email.
-    3. HR/Manager handles all project communication externally.
-    4. Project is tracked internally by the TitanCode team.
+### 💻 Member / Applicant
+*   Registers manually (`POST /api/v1/auth/register`).
+*   Applies to a department and waits for Manager approval.
+*   Once approved, they are assigned to active projects and earn a **70% profit share**.
 
 ---
 
-## 2. The "Hire Our Service" Flow (Manual Process)
+## 3. Financial Flow (The 70/30 Split)
 
-1.  **Lead Generation**: A potential client submits a "Hire Us" form (`POST /api/v1/projects/client/request-project`).
-2.  **HR Outreach**: HR receives a notification, reviews the budget/description, and contacts the Client via WhatsApp/Email.
-3.  **Discovery & Quote**: A meeting is held (external to the app, or via internal meeting links sent manually).
-4.  **Internal Setup**: Once the client agrees, a Manager creates or activates the Project in the TitanCode system for internal tracking.
-5.  **Execution**: Members work on tasks. The Client is updated manually by the Manager/HR via their preferred communication channel (WhatsApp/Slack/Email).
-6.  **Payment**: Client pays via a Stripe link sent manually by the Manager.
-7.  **Auto-Payout**: Stripe Webhook triggers the internal status to "Completed," and the 70/30 profit split is automatically distributed to the team's wallets.
-
----
-
-## 3. The "Work & Earn" Flow (Member User Flow)
-
-1.  **Assignment**: Member is assigned tasks by the Manager.
-2.  **Notification**: Member receives a real-time notification on their dashboard.
-3.  **Reward**: Upon project completion (verified by Stripe), the Member's **Wallet** is credited automatically.
-4.  **Withdrawal**: Member requests a payout, which is processed by an Admin.
+1.  **Project Completion**: When the project is ready, the Manager sends a Stripe link to the client manually.
+2.  **Payment**: The client pays via Stripe.
+3.  **Auto-Payout**: The Stripe Webhook triggers the internal system to:
+    *   Credit the **team members (70%)**.
+    *   Credit the **company treasury (30%)**.
+4.  **Transparency**: All internal users (Members, Managers) see their earnings in their personal Wallets.

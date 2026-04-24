@@ -36,6 +36,8 @@ from app.schemas.project import (
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.tasks.financials import process_payout_calculation
+from app.core.security import get_password_hash
+import secrets
 from app.core.email import send_email
 
 # Create a new router instance — this is registered in main.py
@@ -245,42 +247,63 @@ async def delete_project(
 async def request_project(
     project_in: ProjectRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> Any:
     """
-    Endpoint for external clients to request a new project.
+    Unified "Hire Us" Form — Captures Project Request & Auto-Registers Client.
 
-    This differs from /create because it automatically assigns the
-    client_id to the authenticated user submitting the request.
-
-    Args:
-        project_in: Project details (name, description, budget, deadline).
-
-    Returns:
-        ProjectSchema: The newly created "pending" project record.
+    This endpoint is PUBLIC to reduce conversion friction.
+    1. It checks if a user with the provided email exists.
+    2. If not, it creates a new "Client" account in the background.
+    3. It creates a pending Project linked to that client.
+    4. It notifies HR to initiate manual outreach.
     """
+    # Step 1: Check-or-Create the Client Account
+    stmt = select(User).where(User.email == project_in.client_email)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    if not user:
+        # Auto-generate a secure random password for the background account
+        temp_password = secrets.token_urlsafe(16)
+        user = User(
+            email=project_in.client_email,
+            full_name=project_in.client_full_name,
+            phone_number=project_in.client_phone,
+            password_hash=get_password_hash(temp_password),
+            role="Client",
+            status="approved", # Activated for project tracking
+        )
+        db.add(user)
+        await db.flush() # Get user.id
+
+    # Step 2: Create the Project
+    project_data = project_in.model_dump(exclude={"client_email", "client_full_name", "client_phone"})
     project = Project(
-        **project_in.model_dump(),
-        client_id=current_user.id,
+        **project_data,
+        client_id=user.id,
         status="pending"
     )
     db.add(project)
     await db.commit()
     await db.refresh(project, attribute_names=["members"])
 
-    # ── HR NOTIFICATION ──────────────────────────────────────────────────
-    # Based on PM requirements for manual onboarding, we notify HR of the lead.
-    # In production, settings.HR_EMAIL should be used.
+    # Step 3: Notify HR
     await send_email(
         recipient_email="hr@titancode.tech",
-        subject=f"New Hire Us Lead: {project.name}",
+        subject=f"🔥 NEW LEAD: {project.name}",
         body=(
             f"Hello HR Team,\n\n"
-            f"A new project request has been submitted by {current_user.full_name} ({current_user.email}).\n\n"
-            f"Project: {project.name}\n"
-            f"Budget: ${project.budget}\n"
-            f"Description: {project.description}\n\n"
-            "Please contact the client via WhatsApp or Email to begin the manual onboarding process."
+            f"A new client has used the Unified Hire Us form!\n\n"
+            f"CLIENT DETAILS:\n"
+            f"- Name: {project_in.client_full_name}\n"
+            f"- Email: {project_in.client_email}\n"
+            f"- Phone: {project_in.client_phone or "Not provided"}\n\n"
+            f"PROJECT DETAILS:\n"
+            f"- Title: {project.name}\n"
+            f"- Budget: ${project.budget}\n"
+            f"- Description: {project.description}\n\n"
+            "ACTION REQUIRED:\n"
+            "Please contact the client via WhatsApp/Email to finalize the project scope."
         )
     )
 

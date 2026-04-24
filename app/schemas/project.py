@@ -6,7 +6,7 @@ Schemas for client project management.
 Status lifecycle: pending → active → completed | cancelled
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List
@@ -27,11 +27,22 @@ class ProjectCreate(ProjectBase):
 
 
 class ProjectRequest(BaseModel):
-    """Schema for POST /projects/client/request-project — client_id is inferred."""
+    """
+    Schema for POST /projects/client/request-project (The "Hire Us" Form).
+
+    This unified form captures both project details and client contact info
+    to enable zero-friction onboarding.
+    """
+    # Project Details
     name: str
     description: Optional[str] = None
     budget: Decimal = Decimal('0.00')
     deadline: Optional[datetime] = None
+
+    # Client Contact Info (For Auto-Registration)
+    client_email: EmailStr
+    client_full_name: str
+    client_phone: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
