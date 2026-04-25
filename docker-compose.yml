@@ -55,6 +55,8 @@ services:
       # Note: inside Docker, "db" is the hostname (not "localhost")
       - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/titancode
     volumes:
+      # Map current directory to /app for development
+      - .:/app
       # Persist uploaded files (KYC, Portfolio, etc.)
       - uploads_data:/app/uploads
     depends_on:

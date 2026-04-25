@@ -19,7 +19,7 @@ Relationships:
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Numeric, DateTime, Table, Boolean
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Numeric, DateTime, Table, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -106,6 +106,10 @@ class User(Base):
     bank_name = Column(String(255), nullable=True)
     bank_account_number = Column(String(255), nullable=True)
     status = Column(String(50), default="pending", nullable=False)
+    # ── Magic link fields (Client onboarding) ──────────────────────────
+    magic_link_token = Column(String(512), nullable=True, index=True)
+    magic_link_expires_at = Column(DateTime(timezone=True), nullable=True)
+    onboarded = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     # Many-to-one: a user belongs to one department
@@ -483,3 +487,40 @@ class PayoutInvoice(Base):
 
     # Relationships
     project = relationship("Project", backref="payout_invoice")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CLIENT INQUIRY MODEL (Hire Us Form)
+# ═══════════════════════════════════════════════════════════════════════
+class ClientInquiry(Base):
+    """
+    Stores submissions from the public "Hire Us" contact form.
+    Each record represents a potential client who wants to work with TitanCode.
+
+    Workflow:
+        1. Prospect submits public form → status = "new"
+        2. HR contacts them manually → status = "contacted"
+        3. Admin sends magic link    → status = "converted" (client account created)
+
+    Columns:
+        id:               Primary key.
+        full_name:        Prospect's full name.
+        email:            Contact email (unique per inquiry).
+        company:          Their company or project name.
+        phone:            Contact phone number.
+        service_interest: What service they're interested in (e.g. "Web App").
+        message:          Their message / project description.
+        status:           new | contacted | converted
+        created_at:       Timestamp of submission.
+    """
+    __tablename__ = "client_inquiries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False, index=True)
+    company = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    service_interest = Column(String(255), nullable=True)
+    message = Column(Text, nullable=True)
+    status = Column(String(50), default="new", nullable=False)  # new | contacted | converted
+    created_at = Column(DateTime(timezone=True), default=utcnow)

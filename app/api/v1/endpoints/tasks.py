@@ -31,6 +31,9 @@ from app.db.database import get_db
 from app.db.models import Task, User
 from app.schemas.task import Task as TaskSchema, TaskCreate, TaskUpdate
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.notifications import manager as notification_manager
+from app.core.email import send_email
+from sqlalchemy import select as sa_select
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -68,6 +71,49 @@ async def create_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)  # Reload to get auto-generated fields (id, created_at)
+
+    # Notify the assigned team member via WebSocket + email
+    if task.assigned_user:
+        # Look up their email for the email notification
+        assignee_result = await db.execute(sa_select(User).where(User.id == task.assigned_user))
+        assignee = assignee_result.scalars().first()
+
+        # Real-time WebSocket push
+        await notification_manager.send_personal_message(
+            user_id=task.assigned_user,
+            message={
+                "type": "task_assigned",
+                "title": "New Task Assigned 📋",
+                "message": f"You have been assigned a new task: {task.task_title}",
+                "task_id": task.id,
+            },
+        )
+
+        # Email notification
+        if assignee and assignee.email:
+            await send_email(
+                recipient_email=assignee.email,
+                subject=f"New Task Assigned: {task.task_title}",
+                body=(
+                    f"Hi {assignee.full_name},\n\n"
+                    f"You have been assigned a new task:\n\n"
+                    f"Task:     {task.task_title}\n"
+                    f"Deadline: {task.deadline or 'Not set'}\n\n"
+                    f"{task.description or ''}\n\n"
+                    f"— The TitanCode Team"
+                ),
+                html_content=(
+                    f"<p>Hi <strong>{assignee.full_name}</strong>,</p>"
+                    f"<p>You have been assigned a new task:</p>"
+                    f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Task</td><td style='padding:6px;'>{task.task_title}</td></tr>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Deadline</td><td style='padding:6px;'>{task.deadline or 'Not set'}</td></tr>"
+                    f"</table>"
+                    f"<p>{task.description or ''}</p>"
+                    f"<br><p>— The TitanCode Team</p>"
+                ),
+            )
+
     return task
 
 

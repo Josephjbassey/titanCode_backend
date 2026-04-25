@@ -110,3 +110,50 @@ def create_refresh_token(subject: Union[str, Any], expires_delta: Optional[timed
     to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+
+def create_magic_link_token(email: str, expires_hours: int = 24) -> str:
+    """
+    Generate a one-time magic link JWT for client onboarding.
+
+    The token encodes the client's EMAIL (not user ID) so it can be
+    validated before the user record exists, and a `type: magic_link`
+    claim to distinguish it from normal access/refresh tokens.
+
+    Args:
+        email:        The client's email address.
+        expires_hours: How long before the link expires (default: 24h).
+
+    Returns:
+        A signed JWT string to be embedded in the onboarding URL.
+    """
+    expire = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
+    to_encode = {"exp": expire, "email": email, "type": "magic_link"}
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def decode_magic_link_token(token: str) -> str:
+    """
+    Decode and validate a magic link token.
+
+    Args:
+        token: The JWT string from the onboarding URL.
+
+    Returns:
+        The email address encoded in the token.
+
+    Raises:
+        ValueError: If the token is invalid, expired, or wrong type.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "magic_link":
+            raise ValueError("Invalid token type")
+        email = payload.get("email")
+        if not email:
+            raise ValueError("Token missing email claim")
+        return email
+    except jwt.ExpiredSignatureError:
+        raise ValueError("Magic link has expired")
+    except jwt.InvalidTokenError:
+        raise ValueError("Invalid magic link token")

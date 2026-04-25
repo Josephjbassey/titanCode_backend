@@ -36,6 +36,8 @@ from app.schemas.project import (
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.tasks.financials import process_payout_calculation
+from app.core.notifications import manager as notification_manager
+from app.core.email import send_email
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -200,6 +202,72 @@ async def update_project(
     # Step 5: Trigger Background Payout Task (Constraint #2 compliance)
     if trigger_payout:
         process_payout_calculation.delay(project.id)
+
+    # Step 6: Notify client on status change
+    old_status = project.status  # Already updated above, track via trigger_payout flag
+    if project_in.status and project.client_id:
+        # Fetch client info for the email
+        client_result = await db.execute(select(User).where(User.id == project.client_id))
+        client = client_result.scalars().first()
+
+        status_display = project.status.upper()
+        status_messages = {
+            "active": "Great news! Work on your project has officially started.",
+            "completed": "Your project has been completed. Our team will follow up shortly.",
+            "cancelled": "Your project has been cancelled. Please contact us for details.",
+            "pending": "Your project is now under review.",
+        }
+        status_note = status_messages.get(project.status, f"Status changed to: {project.status}")
+
+        # WebSocket real-time push
+        await notification_manager.send_personal_message(
+            user_id=project.client_id,
+            message={
+                "type": "project_update",
+                "title": f"Project Update: {project.project_name}",
+                "message": status_note,
+                "project_id": project.id,
+                "status": project.status,
+            },
+        )
+
+        # Email notification to client
+        if client and client.email:
+            await send_email(
+                recipient_email=client.email,
+                subject=f"Project Update: {project.project_name} — {status_display}",
+                body=(
+                    f"Hi {client.full_name},\n\n"
+                    f"{status_note}\n\n"
+                    f"Project: {project.project_name}\n"
+                    f"Status:  {status_display}\n\n"
+                    f"If you have any questions, just reply to this email.\n\n"
+                    f"— The TitanCode Team"
+                ),
+                html_content=(
+                    f"<p>Hi <strong>{client.full_name}</strong>,</p>"
+                    f"<p>{status_note}</p>"
+                    f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Project</td><td style='padding:6px;'>{project.project_name}</td></tr>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Status</td><td style='padding:6px;'>{status_display}</td></tr>"
+                    f"</table>"
+                    f"<p>If you have any questions, just reply to this email.</p>"
+                    f"<br><p>— The TitanCode Team</p>"
+                ),
+            )
+
+    # Step 7: Notify newly assigned team members
+    if project_in.member_ids is not None:
+        for member_id in project_in.member_ids:
+            await notification_manager.send_personal_message(
+                user_id=member_id,
+                message={
+                    "type": "project_assigned",
+                    "title": "Added to Project 🚀",
+                    "message": f"You've been added to the project: {project.project_name}",
+                    "project_id": project.id,
+                },
+            )
 
     # Populate member_ids for the response
     project.member_ids = [m.id for m in project.members]

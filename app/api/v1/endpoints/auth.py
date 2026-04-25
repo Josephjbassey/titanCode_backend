@@ -29,6 +29,7 @@ from jwt.exceptions import InvalidTokenError
 
 from app.core.config import settings
 from app.core import security
+from app.core.email import send_email
 from app.db.database import get_db
 from app.db.models import User
 from app.schemas.user import UserCreate, User as UserSchema, UserPrivate
@@ -190,6 +191,27 @@ async def register(request: Request, user_in: UserCreate, db: AsyncSession = Dep
     db.add(user)
     await db.commit()
     await db.refresh(user)  # Refresh to populate auto-generated fields (id, created_at)
+
+    # Send welcome email — informs the new member their account is pending review
+    await send_email(
+        recipient_email=user.email,
+        subject="Welcome to TitanCode Technologies! Your application is under review.",
+        body=(
+            f"Hi {user.full_name},\n\n"
+            f"Thank you for registering with TitanCode Technologies!\n\n"
+            f"Your account has been created and is currently pending review by our team. "
+            f"You will receive a notification once your application has been approved.\n\n"
+            f"— The TitanCode Team"
+        ),
+        html_content=(
+            f"<p>Hi <strong>{user.full_name}</strong>,</p>"
+            f"<p>Thank you for registering with <strong>TitanCode Technologies</strong>!</p>"
+            f"<p>Your account has been created and is currently <strong>pending review</strong> "
+            f"by our team. You will receive a notification once your application has been approved.</p>"
+            f"<br><p>— The TitanCode Team</p>"
+        ),
+    )
+
     return user
 
 

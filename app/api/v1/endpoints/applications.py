@@ -29,6 +29,7 @@ from sqlalchemy.future import select
 from typing import Any, List
 
 from app.core.notifications import manager as notification_manager
+from app.core.email import send_email
 
 from app.db.database import get_db
 from app.db.models import Application, User, Department
@@ -197,7 +198,7 @@ async def approve_application(
     await db.commit()
     await db.refresh(application)
 
-    # Step 6: Send a real-time notification to the applicant
+    # Step 6: Send a real-time WebSocket notification to the applicant
     await notification_manager.send_personal_message(
         user_id=application.user_id,
         message={
@@ -206,6 +207,27 @@ async def approve_application(
             "message": "Congratulations! Your application has been approved. Welcome to the team!",
         },
     )
+
+    # Step 7: Send email notification to the applicant
+    if applicant and applicant.email:
+        await send_email(
+            recipient_email=applicant.email,
+            subject="🎉 Your TitanCode Application Has Been Approved!",
+            body=(
+                f"Hi {applicant.full_name},\n\n"
+                f"Congratulations! Your application to join TitanCode Technologies has been approved.\n\n"
+                f"You are now an active member. Welcome to the team!\n\n"
+                f"— The TitanCode Team"
+            ),
+            html_content=(
+                f"<h2>Application Approved ✅</h2>"
+                f"<p>Hi <strong>{applicant.full_name}</strong>,</p>"
+                f"<p>Congratulations! Your application to join <strong>TitanCode Technologies</strong> "
+                f"has been <strong>approved</strong>.</p>"
+                f"<p>You are now an active member. Welcome to the team!</p>"
+                f"<br><p>— The TitanCode Team</p>"
+            ),
+        )
 
     return application
 
@@ -259,7 +281,7 @@ async def reject_application(
     await db.commit()
     await db.refresh(application)
 
-    # Step 5: Send a real-time notification to the applicant
+    # Step 5: Send a real-time WebSocket notification to the applicant
     await notification_manager.send_personal_message(
         user_id=application.user_id,
         message={
@@ -268,5 +290,29 @@ async def reject_application(
             "message": "Your application has been reviewed and was not approved at this time. You may reapply.",
         },
     )
+
+    # Step 6: Send email notification to the applicant
+    # Look up the applicant to get their name and email
+    applicant_res = await db.execute(select(User).where(User.id == application.user_id))
+    rejected_applicant = applicant_res.scalars().first()
+    if rejected_applicant and rejected_applicant.email:
+        await send_email(
+            recipient_email=rejected_applicant.email,
+            subject="Update on Your TitanCode Application",
+            body=(
+                f"Hi {rejected_applicant.full_name},\n\n"
+                f"Thank you for applying to TitanCode Technologies. After careful review, "
+                f"we are unable to approve your application at this time.\n\n"
+                f"You are welcome to reapply in the future. We appreciate your interest!\n\n"
+                f"— The TitanCode Team"
+            ),
+            html_content=(
+                f"<p>Hi <strong>{rejected_applicant.full_name}</strong>,</p>"
+                f"<p>Thank you for applying to <strong>TitanCode Technologies</strong>.</p>"
+                f"<p>After careful review, we are unable to approve your application at this time. "
+                f"You are welcome to reapply in the future.</p>"
+                f"<br><p>— The TitanCode Team</p>"
+            ),
+        )
 
     return application

@@ -22,6 +22,8 @@ from app.schemas.financials import (
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.core.rate_limiter import limiter
+from app.core.notifications import manager as notification_manager
+from app.core.email import send_email
 from starlette.requests import Request
 
 # Create the router
@@ -162,6 +164,64 @@ async def process_withdrawal(
     
     await db.commit()
     await db.refresh(withdrawal)
+
+    # Notify the user of the action taken on their withdrawal request
+    notification_messages = {
+        "approved": (
+            "Withdrawal Approved ✅",
+            f"Your withdrawal of ${withdrawal.amount} has been approved and is being processed.",
+        ),
+        "rejected": (
+            "Withdrawal Rejected ❌",
+            f"Your withdrawal of ${withdrawal.amount} was rejected. The funds have been returned to your wallet.",
+        ),
+        "paid": (
+            "Payout Sent! 💸",
+            f"Your payout of ${withdrawal.amount} has been sent. Check your bank account!",
+        ),
+    }
+
+    title, message_text = notification_messages.get(
+        action.status, ("Withdrawal Update", f"Your withdrawal status is now: {action.status}")
+    )
+
+    # Real-time WebSocket push
+    await notification_manager.send_personal_message(
+        user_id=withdrawal.user_id,
+        message={
+            "type": "withdrawal_update",
+            "title": title,
+            "message": message_text,
+            "withdrawal_id": withdrawal.id,
+            "status": action.status,
+        },
+    )
+
+    # Fetch user info for email
+    user_result = await db.execute(select(User).where(User.id == withdrawal.user_id))
+    notified_user = user_result.scalars().first()
+    if notified_user and notified_user.email:
+        await send_email(
+            recipient_email=notified_user.email,
+            subject=f"Withdrawal Update: {title}",
+            body=(
+                f"Hi {notified_user.full_name},\n\n"
+                f"{message_text}\n\n"
+                f"Amount: ${withdrawal.amount}\n"
+                f"Status: {action.status.upper()}\n\n"
+                f"— The TitanCode Finance Team"
+            ),
+            html_content=(
+                f"<p>Hi <strong>{notified_user.full_name}</strong>,</p>"
+                f"<p>{message_text}</p>"
+                f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
+                f"<tr><td style='padding:6px;font-weight:bold;'>Amount</td><td style='padding:6px;'>${withdrawal.amount}</td></tr>"
+                f"<tr><td style='padding:6px;font-weight:bold;'>Status</td><td style='padding:6px;'>{action.status.upper()}</td></tr>"
+                f"</table>"
+                f"<br><p>— The TitanCode Finance Team</p>"
+            ),
+        )
+
     return withdrawal
 
 

@@ -82,11 +82,19 @@ class Settings(BaseSettings):
     STRIPE_API_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None
 
+    # ── Miscellaneous ───────────────────────────────────────────────────
+    VERSION: str = "1.0.0"
+    RATE_LIMIT_ENABLED: bool = True
+    STORAGE_TYPE: str = "local"
+    UPLOAD_DIR: str = "uploads"
+    MAX_UPLOAD_SIZE_MB: int = 10
+
     # Tell Pydantic to read variables from the .env file
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",
     )
 
 

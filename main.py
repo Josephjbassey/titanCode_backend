@@ -27,13 +27,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.future import select
 
 from app.core.config import settings
-from app.core.security import get_password_hash
+from app.core import security
 from app.core.logging_config import setup_logging
 from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
 from app.db.database import engine, Base, AsyncSessionLocal
 from app.db.models import User
-from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks
+from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -68,7 +68,7 @@ async def seed_default_admin():
             admin = User(
                 full_name="TitanCode Admin",
                 email="admin@titancode.com",
-                password_hash=get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
+                password_hash=security.get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
                 role="CEO",
                 status="approved",
             )
@@ -163,6 +163,8 @@ app.include_router(revenue.router, prefix=f"{settings.API_V1_STR}/revenue", tags
 app.include_router(financials.router, prefix=f"{settings.API_V1_STR}/financials", tags=["financials"])
 # This router handles specialized webhooks, like payment success notifications from Stripe.
 app.include_router(webhooks.router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
+# Client onboarding: Hire Us form, magic link dispatch & activation
+app.include_router(client.router, prefix=f"{settings.API_V1_STR}/client", tags=["client"])
 
 
 # ═══════════════════════════════════════════════════════════════════════
