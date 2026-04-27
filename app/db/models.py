@@ -442,6 +442,7 @@ class Withdrawal(Base):
     status = Column(String(50), default="pending", nullable=False)
     bank_info = Column(Text, nullable=True)
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    external_payout_idempotency_key = Column(String(128), nullable=True, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
 

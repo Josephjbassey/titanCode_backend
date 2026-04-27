@@ -41,6 +41,12 @@ class WithdrawalCreate(WithdrawalBase):
 class WithdrawalAction(BaseModel):
     """Schema for an Admin to update a withdrawal status (approve/reject/pay)."""
     status: str = Field(..., pattern="^(approved|rejected|paid)$")
+    idempotency_key: Optional[str] = Field(
+        None,
+        min_length=8,
+        max_length=128,
+        description="Required when marking a withdrawal as paid via external payout providers.",
+    )
 
 class Withdrawal(WithdrawalBase):
     """Final representation of a withdrawal record."""
@@ -48,6 +54,7 @@ class Withdrawal(WithdrawalBase):
     user_id: int
     status: str             # pending | approved | rejected | paid
     reviewed_by: Optional[int] = None
+    external_payout_idempotency_key: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
