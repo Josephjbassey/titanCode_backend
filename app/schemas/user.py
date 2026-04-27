@@ -13,7 +13,7 @@ Schema hierarchy:
 """
 
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -99,3 +99,12 @@ class UserPrivate(User):
     """Private user schema (includes wallet/bank info for the owner/admin)."""
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
+
+
+class UserListResponse(BaseModel):
+    """Paginated response for user listing endpoints."""
+    items: List[User]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
