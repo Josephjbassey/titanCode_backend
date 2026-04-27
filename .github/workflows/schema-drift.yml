@@ -1,0 +1,48 @@
+name: Schema Drift Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  migration-drift:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password123
+          POSTGRES_DB: titancode
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d titancode"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SECRET_KEY: test-secret-key
+      DATABASE_URL: postgresql+asyncpg://postgres:password123@localhost:5432/titancode
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Fail if metadata diverges from Alembic head
+        run: alembic check

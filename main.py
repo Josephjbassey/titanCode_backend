@@ -8,7 +8,6 @@ This is the main FastAPI application file. It:
 3. Registers all API routers.
 4. Runs startup logic via the `lifespan` context manager:
    - Initializes structured JSON logging.
-   - Creates all database tables if they don't exist.
    - Seeds the default CEO admin account (admin@titancode.com).
 5. Provides a health check endpoint at GET /.
 
@@ -31,11 +30,10 @@ from app.core import security
 from app.core.logging_config import setup_logging
 from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
-from app.db.database import engine, Base, AsyncSessionLocal
+from app.db.database import engine, AsyncSessionLocal
 from app.db.models import User
 from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client
 
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 # Configure a logger for startup events
@@ -88,8 +86,7 @@ async def lifespan(app: FastAPI):
     Modern FastAPI lifespan handler (replaces deprecated @app.on_event).
 
     Startup (before `yield`):
-        1. Create all database tables from ORM models.
-        2. Seed the default admin account.
+        1. Seed the default admin account.
 
     Shutdown (after `yield`):
         1. Dispose the database engine to close all connections cleanly.
@@ -98,12 +95,7 @@ async def lifespan(app: FastAPI):
     # Step 1: Initialize structured JSON logging (must be first)
     setup_logging()
 
-    # Step 2: Create database tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created successfully.")
-
-    # Step 3: Seed the default admin account
+    # Step 2: Seed the default admin account
     await seed_default_admin()
 
     yield  # ← Application runs here, handling requests

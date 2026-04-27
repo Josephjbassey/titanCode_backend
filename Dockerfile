@@ -49,4 +49,4 @@ COPY . .
 # -w 4         → Run 4 worker processes (adjust based on CPU cores)
 # -k uvicorn.workers.UvicornWorker → Use the Uvicorn worker class
 # --bind 0.0.0.0:8000 → Listen on all interfaces
-CMD ["gunicorn", "main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]
+CMD ["sh", "-c", "alembic upgrade head && gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000"]
