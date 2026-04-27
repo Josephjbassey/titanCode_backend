@@ -32,6 +32,13 @@ router = APIRouter()
 # ── RBAC Dependencies ──────────────────────────────────────────────────
 allow_admins = RoleChecker(["CEO", "Admin"])
 
+WITHDRAWAL_ALLOWED_TRANSITIONS = {
+    "pending": {"approved", "rejected"},
+    "approved": {"paid"},
+    "rejected": set(),
+    "paid": set(),
+}
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # GET /financials/company-wallet — View Corporate Treasury
@@ -80,7 +87,9 @@ async def request_withdrawal(
         WithdrawalSchema: The created request.
     """
     # 1. Check user's personal wallet balance
-    result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
+    result = await db.execute(
+        select(Wallet).where(Wallet.user_id == current_user.id).with_for_update()
+    )
     user_wallet = result.scalars().first()
     
     if not user_wallet or user_wallet.balance < withdrawal_in.amount:
@@ -146,20 +155,54 @@ async def process_withdrawal(
     Returns:
         WithdrawalSchema: The updated request record.
     """
-    result = await db.execute(select(Withdrawal).where(Withdrawal.id == withdrawal_id))
+    result = await db.execute(
+        select(Withdrawal).where(Withdrawal.id == withdrawal_id).with_for_update()
+    )
     withdrawal = result.scalars().first()
     if not withdrawal:
         raise HTTPException(status_code=404, detail="Withdrawal request not found")
 
+    current_status = withdrawal.status
+    target_status = action.status
+
+    if target_status == "paid":
+        if not action.idempotency_key:
+            raise HTTPException(
+                status_code=400,
+                detail="idempotency_key is required when status is paid",
+            )
+        if (
+            withdrawal.external_payout_idempotency_key
+            and withdrawal.external_payout_idempotency_key != action.idempotency_key
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Withdrawal already has a different external payout idempotency key",
+            )
+        if not withdrawal.external_payout_idempotency_key:
+            withdrawal.external_payout_idempotency_key = action.idempotency_key
+
+    # Idempotent replay: avoid repeated side effects (refunds/notifications/email).
+    if target_status == current_status:
+        return withdrawal
+
+    if target_status not in WITHDRAWAL_ALLOWED_TRANSITIONS.get(current_status, set()):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Illegal withdrawal transition: {current_status} -> {target_status}",
+        )
+
     # Handle fund restoration on rejection
-    if action.status == "rejected" and withdrawal.status != "rejected":
-        result = await db.execute(select(Wallet).where(Wallet.user_id == withdrawal.user_id))
+    if target_status == "rejected":
+        result = await db.execute(
+            select(Wallet).where(Wallet.user_id == withdrawal.user_id).with_for_update()
+        )
         user_wallet = result.scalars().first()
         if user_wallet:
             user_wallet.balance += withdrawal.amount
 
     # Update status and reviewer
-    withdrawal.status = action.status
+    withdrawal.status = target_status
     withdrawal.reviewed_by = current_user.id
     
     await db.commit()
@@ -182,7 +225,7 @@ async def process_withdrawal(
     }
 
     title, message_text = notification_messages.get(
-        action.status, ("Withdrawal Update", f"Your withdrawal status is now: {action.status}")
+        target_status, ("Withdrawal Update", f"Your withdrawal status is now: {target_status}")
     )
 
     # Real-time WebSocket push
@@ -193,7 +236,7 @@ async def process_withdrawal(
             "title": title,
             "message": message_text,
             "withdrawal_id": withdrawal.id,
-            "status": action.status,
+            "status": target_status,
         },
     )
 
@@ -208,7 +251,7 @@ async def process_withdrawal(
                 f"Hi {notified_user.full_name},\n\n"
                 f"{message_text}\n\n"
                 f"Amount: ${withdrawal.amount}\n"
-                f"Status: {action.status.upper()}\n\n"
+                f"Status: {target_status.upper()}\n\n"
                 f"— The TitanCode Finance Team"
             ),
             html_content=(
@@ -216,7 +259,7 @@ async def process_withdrawal(
                 f"<p>{message_text}</p>"
                 f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
                 f"<tr><td style='padding:6px;font-weight:bold;'>Amount</td><td style='padding:6px;'>${withdrawal.amount}</td></tr>"
-                f"<tr><td style='padding:6px;font-weight:bold;'>Status</td><td style='padding:6px;'>{action.status.upper()}</td></tr>"
+                f"<tr><td style='padding:6px;font-weight:bold;'>Status</td><td style='padding:6px;'>{target_status.upper()}</td></tr>"
                 f"</table>"
                 f"<br><p>— The TitanCode Finance Team</p>"
             ),

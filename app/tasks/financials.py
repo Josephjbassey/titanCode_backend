@@ -19,7 +19,11 @@ from app.db.models import Project, User, Wallet, Transaction, PayoutInvoice
 logger = logging.getLogger(__name__)
 
 @celery_app.task(name="process_payout_calculation")
-def process_payout_calculation(project_id: int):
+def process_payout_calculation(
+    project_id: int,
+    idempotency_key: str | None = None,
+    externally_triggered: bool = False,
+):
     """
     Synchronous wrapper for our asynchronous payout logic.
     
@@ -38,13 +42,30 @@ def process_payout_calculation(project_id: int):
 
     if loop.is_running():
         # Step 3: If the brain is already thinking (running), safely schedule our task.
-        return asyncio.run_coroutine_threadsafe(_process_payout_calculation_async(project_id), loop).result()
+        return asyncio.run_coroutine_threadsafe(
+            _process_payout_calculation_async(
+                project_id,
+                idempotency_key=idempotency_key,
+                externally_triggered=externally_triggered,
+            ),
+            loop,
+        ).result()
     else:
         # Step 4: Otherwise, run our async task until it finishes.
-        return loop.run_until_complete(_process_payout_calculation_async(project_id))
+        return loop.run_until_complete(
+            _process_payout_calculation_async(
+                project_id,
+                idempotency_key=idempotency_key,
+                externally_triggered=externally_triggered,
+            )
+        )
 
 
-async def _process_payout_calculation_async(project_id: int) -> bool:
+async def _process_payout_calculation_async(
+    project_id: int,
+    idempotency_key: str | None = None,
+    externally_triggered: bool = False,
+) -> bool:
     """
     The Core Financial Engine: Calculates how money is split when a project ends.
     
@@ -52,7 +73,15 @@ async def _process_payout_calculation_async(project_id: int) -> bool:
     We use 'async with' to manage resources like database sessions automatically.
     This ensures that even if something breaks, the connection to the DB is safely closed.
     """
-    logger.info(f"Financial Engine: Starting payout calculation for Project ID {project_id}")
+    if externally_triggered and not idempotency_key:
+        raise ValueError("idempotency_key is required for externally triggered payouts")
+
+    payout_key = idempotency_key or f"project:{project_id}"
+    logger.info(
+        "Financial Engine: Starting payout calculation for Project ID %s [key=%s]",
+        project_id,
+        payout_key,
+    )
     
     async with AsyncSessionLocal() as session:
         try:
@@ -100,7 +129,7 @@ async def _process_payout_calculation_async(project_id: int) -> bool:
                 # 4. DISBURSEMENT: Update member wallets and record the history.
                 for member in members:
                     # Find each member's personal wallet.
-                    stmt = select(Wallet).where(Wallet.user_id == member.id)
+                    stmt = select(Wallet).where(Wallet.user_id == member.id).with_for_update()
                     res = await session.execute(stmt)
                     wallet = res.scalars().first()
                     
@@ -119,14 +148,14 @@ async def _process_payout_calculation_async(project_id: int) -> bool:
                         amount=per_member_payout,
                         transaction_type="credit",
                         description=f"Profit split for Project: {project.name}",
-                        reference_id=str(project.id)
+                        reference_id=f"{payout_key}:member:{member.id}",
                     )
                     session.add(transaction)
 
                 # 5. COMPANY SHARE: The remaining 30% goes to the client/company wallet.
                 company_share = project.budget - total_member_payout
                 if company_share > 0:
-                    stmt = select(Wallet).where(Wallet.user_id == project.client_id)
+                    stmt = select(Wallet).where(Wallet.user_id == project.client_id).with_for_update()
                     res = await session.execute(stmt)
                     company_wallet = res.scalars().first()
                     
@@ -139,7 +168,7 @@ async def _process_payout_calculation_async(project_id: int) -> bool:
                     session.add(Transaction(
                         wallet_id=company_wallet.id, amount=company_share,
                         transaction_type="credit", description=f"Company profit share (30%)",
-                        reference_id=str(project.id)
+                        reference_id=f"{payout_key}:company:{project.client_id}",
                     ))
 
                 # 6. INVOICE GENERATION: Create a final document summarizes the whole payout.
