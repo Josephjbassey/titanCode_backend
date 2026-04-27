@@ -36,6 +36,7 @@ from app.schemas.client import (
     ClientInquiryCreate,
     SendMagicLinkRequest,
     MagicLinkOnboardResponse,
+    SendCustomEmailRequest,
 )
 from app.api.v1.endpoints.auth import RoleChecker
 from app.core.tasks import enqueue_email_task
@@ -378,3 +379,31 @@ async def list_inquiries(
         select(ClientInquiryModel).order_by(ClientInquiryModel.created_at.desc())
     )
     return result.scalars().all()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST /client/send-custom-email — Admin dispatches manual email
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/send-custom-email", status_code=status.HTTP_200_OK)
+async def send_custom_email(
+    body: SendCustomEmailRequest,
+    current_user: User = Depends(allow_admin),
+) -> Any:
+    """
+    Send a custom, professionally branded email to a client directly from the dashboard.
+    Accessible only to CEO and Admin roles.
+    """
+    enqueue_email_task(
+        recipient_email=body.email,
+        subject=body.subject,
+        body=(
+            f"{body.message}\n\n"
+            f"— The TitanCode Team"
+        ),
+        html_content=(
+            f"<p>{body.message.replace(chr(10), '<br>')}</p>"
+            f"<br><p>— The TitanCode Team</p>"
+        ),
+    )
+
+    return {"message": f"Custom email successfully queued to {body.email}"}

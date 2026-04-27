@@ -50,3 +50,10 @@ class MagicLinkOnboardResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     message: str = "Account activated successfully! Welcome to TitanCode."
+
+
+class SendCustomEmailRequest(BaseModel):
+    """Request body for sending a custom email to a client from the dashboard."""
+    email: EmailStr
+    subject: str
+    message: str
