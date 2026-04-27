@@ -9,16 +9,12 @@ members and clients.
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any
-from datetime import datetime
-from sqlalchemy import func
-
-from app.core.notifications import manager as notification_manager
-from app.core.email import send_email
+from typing import Any, List
 from app.db.database import get_db
 from app.db.models import Meeting, User
 from app.schemas.meeting import Meeting as MeetingSchema, MeetingCreate, MeetingListResponse, MeetingUpdate
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 
 # Create the router instance
 router = APIRouter()
@@ -62,7 +58,7 @@ async def create_meeting(
 
     # 1. Send WebSocket notification to the client if assigned
     if meeting.client_id:
-        await notification_manager.send_personal_message(
+        enqueue_websocket_task(
             user_id=meeting.client_id,
             message={
                 "type": "meeting",
@@ -80,7 +76,7 @@ async def create_meeting(
         result = await db.execute(select(User).where(User.id == meeting.client_id))
         client = result.scalars().first()
         if client and client.email:
-            await send_email(
+            enqueue_email_task(
                 recipient_email=client.email,
                 subject=f"New Meeting Scheduled: {meeting.title}",
                 body=(
@@ -210,7 +206,7 @@ async def cancel_meeting(
 
     # Notify the client about the cancellation
     if meeting.client_id:
-        await notification_manager.send_personal_message(
+        enqueue_websocket_task(
             user_id=meeting.client_id,
             message={
                 "type": "meeting",

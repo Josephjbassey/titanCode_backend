@@ -22,9 +22,8 @@ from app.schemas.financials import (
     WithdrawalListResponse,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 from app.core.rate_limiter import limiter
-from app.core.notifications import manager as notification_manager
-from app.core.email import send_email
 from starlette.requests import Request
 from sqlalchemy import func
 
@@ -207,7 +206,7 @@ async def process_withdrawal(
     )
 
     # Real-time WebSocket push
-    await notification_manager.send_personal_message(
+    enqueue_websocket_task(
         user_id=withdrawal.user_id,
         message={
             "type": "withdrawal_update",
@@ -222,7 +221,7 @@ async def process_withdrawal(
     user_result = await db.execute(select(User).where(User.id == withdrawal.user_id))
     notified_user = user_result.scalars().first()
     if notified_user and notified_user.email:
-        await send_email(
+        enqueue_email_task(
             recipient_email=notified_user.email,
             subject=f"Withdrawal Update: {title}",
             body=(
