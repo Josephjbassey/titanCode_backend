@@ -28,16 +28,18 @@ File Size Limit:
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.storage import storage
 from app.db.database import get_db
-from app.db.models import User
-from app.api.v1.endpoints.auth import get_current_active_user, RoleChecker
+from app.db.models import User, StoredFile
+from app.api.v1.endpoints.auth import get_current_active_user
 
 # Logger for file operations
 logger = logging.getLogger(__name__)
@@ -48,6 +50,91 @@ router = APIRouter()
 # ── Constants ──────────────────────────────────────────────────────────
 MAX_FILE_SIZE = 10 * 1024 * 1024   # 10 MB in bytes
 ALLOWED_FOLDERS = {"kyc", "portfolio", "general"}
+ALLOWED_VISIBILITY = {"private", "public"}
+ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "text/plain",
+    "application/json",
+    "text/csv",
+}
+
+
+def _normalize_content_type(content_type: str | None) -> str:
+    if not content_type:
+        return ""
+    return content_type.split(";")[0].strip().lower()
+
+
+def _detect_content_type(filename: str, sample: bytes) -> str:
+    if sample.startswith(b"%PDF-"):
+        return "application/pdf"
+    if sample.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if sample.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if sample.lstrip().startswith((b"{", b"[")):
+        return "application/json"
+    if b"\x00" in sample:
+        return "application/octet-stream"
+
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".csv":
+        return "text/csv"
+    return "text/plain"
+
+
+async def _validate_size_and_content_type(file: UploadFile) -> str:
+    size = 0
+    sample = bytearray()
+    chunk_size = 1024 * 1024
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if len(sample) < 1024:
+            sample.extend(chunk[: 1024 - len(sample)])
+        if size > MAX_FILE_SIZE:
+            await file.seek(0)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)} MB.",
+            )
+
+    await file.seek(0)
+
+    detected_type = _detect_content_type(file.filename or "", bytes(sample))
+    declared_type = _normalize_content_type(file.content_type)
+    if detected_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail="Unsupported file type.")
+    if declared_type and declared_type != detected_type:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Invalid content type. Declared '{declared_type}' does not match file content.",
+        )
+
+    return detected_type
+
+
+def _can_access_file(record: StoredFile, current_user: User) -> bool:
+    if record.visibility == "public":
+        return True
+    if record.owner_id == current_user.id:
+        return True
+    if current_user.role in {"CEO", "Admin"}:
+        return True
+    return False
+
+
+def _can_delete_file(record: StoredFile, current_user: User) -> bool:
+    if record.owner_id == current_user.id:
+        return True
+    if current_user.role in {"CEO", "Admin"}:
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -60,7 +147,9 @@ async def upload_file(
         default="general",
         description="Category folder: 'kyc', 'portfolio', or 'general'",
     ),
+    visibility: str = Form(default="private", description="File visibility: 'private' or 'public'"),
     current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """
     Upload a file to the storage system.
@@ -88,16 +177,11 @@ async def upload_file(
             detail=f"Invalid folder '{folder}'. Allowed: {', '.join(ALLOWED_FOLDERS)}",
         )
 
-    # ── Step 2: Check file size ────────────────────────────────────────
-    # Read the file content to check its size
-    contents = await file.read()
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)} MB.",
-        )
-    # Reset the file pointer so the storage backend can read it again
-    await file.seek(0)
+    if visibility not in ALLOWED_VISIBILITY:
+        raise HTTPException(status_code=400, detail=f"Invalid visibility '{visibility}'.")
+
+    # ── Step 2: Check file size + validate content type server-side ────
+    validated_content_type = await _validate_size_and_content_type(file)
 
     # ── Step 3: Save the file via the storage backend ──────────────────
     try:
@@ -106,12 +190,30 @@ async def upload_file(
         logger.error(f"File upload failed: {e}")
         raise HTTPException(status_code=500, detail="File upload failed. Please try again.")
 
-    # ── Step 4: Add uploader info to the metadata ──────────────────────
-    metadata["uploaded_by"] = current_user.id
+    # ── Step 4: Persist file metadata for authorization ────────────────
+    record = StoredFile(
+        filename=metadata["filename"],
+        original_filename=metadata["original_filename"],
+        path=metadata["path"],
+        content_type=validated_content_type,
+        size=metadata["size"],
+        folder=folder,
+        visibility=visibility,
+        owner_id=current_user.id,
+    )
+    db.add(record)
+    await db.commit()
+    await db.refresh(record)
 
     logger.info(f"User {current_user.id} uploaded file: {metadata['filename']} to {folder}/")
 
-    return metadata
+    return {
+        **metadata,
+        "content_type": validated_content_type,
+        "owner_id": record.owner_id,
+        "visibility": record.visibility,
+        "created_at": record.created_at,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -122,6 +224,7 @@ async def download_file(
     folder: str,
     filename: str,
     current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """
     Download a file by its folder and filename.
@@ -146,10 +249,16 @@ async def download_file(
     if folder not in ALLOWED_FOLDERS:
         raise HTTPException(status_code=400, detail=f"Invalid folder '{folder}'.")
 
-    # Build the relative path and resolve it
-    file_path = f"uploads/{folder}/{filename}"
-    absolute_path = await storage.get(file_path)
+    stmt = select(StoredFile).where(StoredFile.folder == folder, StoredFile.filename == filename)
+    result = await db.execute(stmt)
+    record = result.scalars().first()
 
+    if record is None:
+        raise HTTPException(status_code=404, detail="File not found.")
+    if not _can_access_file(record, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to access this file.")
+
+    absolute_path = await storage.get(record.path)
     if absolute_path is None:
         raise HTTPException(status_code=404, detail="File not found.")
 
@@ -157,8 +266,8 @@ async def download_file(
 
     return FileResponse(
         path=absolute_path,
-        filename=filename,  # Suggested download filename
-        media_type="application/octet-stream",
+        filename=record.original_filename,
+        media_type=record.content_type,
     )
 
 
@@ -167,12 +276,12 @@ async def download_file(
 # ═══════════════════════════════════════════════════════════════════════
 @router.delete(
     "/{folder}/{filename}",
-    dependencies=[Depends(RoleChecker(["CEO", "Admin"]))],
 )
 async def delete_file(
     folder: str,
     filename: str,
     current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """
     Delete a file from storage (Admin/CEO only).
@@ -195,12 +304,21 @@ async def delete_file(
     if folder not in ALLOWED_FOLDERS:
         raise HTTPException(status_code=400, detail=f"Invalid folder '{folder}'.")
 
-    file_path = f"uploads/{folder}/{filename}"
-    deleted = await storage.delete(file_path)
+    stmt = select(StoredFile).where(StoredFile.folder == folder, StoredFile.filename == filename)
+    result = await db.execute(stmt)
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="File not found.")
+    if not _can_delete_file(record, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this file.")
 
+    deleted = await storage.delete(record.path)
     if not deleted:
         raise HTTPException(status_code=404, detail="File not found.")
 
-    logger.info(f"Admin {current_user.id} deleted file: {folder}/{filename}")
+    await db.delete(record)
+    await db.commit()
+
+    logger.info(f"User {current_user.id} deleted file: {folder}/{filename}")
 
     return {"detail": f"File '{filename}' deleted successfully.", "folder": folder}
