@@ -23,10 +23,11 @@ API Routes (all prefixed with /api/v1/applications):
 """
 
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any, List
+from typing import Any
+from sqlalchemy import func
 
 from app.core.notifications import manager as notification_manager
 from app.core.email import send_email
@@ -36,6 +37,7 @@ from app.db.models import Application, User, Department
 from app.schemas.application import (
     Application as AppSchema,
     ApplicationCreate,
+    ApplicationListResponse,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 
@@ -116,10 +118,15 @@ async def apply_to_department(
 # ═══════════════════════════════════════════════════════════════════════
 # GET /applications — List all applications
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/", response_model=List[AppSchema])
+@router.get("/", response_model=ApplicationListResponse)
 async def list_applications(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(None, alias="status"),
+    department_id: int | None = Query(None),
+    user_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(allow_managers),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
     """
     List all membership applications.
@@ -131,8 +138,27 @@ async def list_applications(
         List[AppSchema]: All application records in the database.
     """
     # SELECT * FROM applications
-    result = await db.execute(select(Application))
-    return result.scalars().all()
+    filters = []
+    if status_filter:
+        filters.append(Application.status == status_filter)
+    if department_id is not None:
+        filters.append(Application.department_id == department_id)
+    if user_id is not None:
+        filters.append(Application.user_id == user_id)
+    if current_user.role not in ["CEO", "Admin", "Manager"]:
+        filters.append(Application.user_id == current_user.id)
+
+    total = (await db.execute(select(func.count(Application.id)).where(*filters))).scalar_one()
+    result = await db.execute(
+        select(Application)
+        .where(*filters)
+        .order_by(Application.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = result.scalars().all()
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}
 
 
 # ═══════════════════════════════════════════════════════════════════════

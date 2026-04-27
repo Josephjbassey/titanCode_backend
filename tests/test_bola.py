@@ -151,7 +151,7 @@ async def test_sensitive_data_leakage(client: AsyncClient):
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     assert users_resp.status_code == 200
-    users = users_resp.json()
+    users = users_resp.json()["items"]
     
     for user in users:
         assert "bank_name" not in user

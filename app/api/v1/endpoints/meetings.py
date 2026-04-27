@@ -6,17 +6,18 @@ for creating, listing, updating, and cancelling meetings between team
 members and clients.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any, List
+from typing import Any
 from datetime import datetime
+from sqlalchemy import func
 
 from app.core.notifications import manager as notification_manager
 from app.core.email import send_email
 from app.db.database import get_db
 from app.db.models import Meeting, User
-from app.schemas.meeting import Meeting as MeetingSchema, MeetingCreate, MeetingUpdate
+from app.schemas.meeting import Meeting as MeetingSchema, MeetingCreate, MeetingListResponse, MeetingUpdate
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 
 # Create the router instance
@@ -98,10 +99,16 @@ async def create_meeting(
 # ═══════════════════════════════════════════════════════════════════════
 # GET /meetings — List all meetings
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/", response_model=List[MeetingSchema])
+@router.get("/", response_model=MeetingListResponse)
 async def list_meetings(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(None, alias="status"),
+    client_id: int | None = Query(None),
+    created_by: int | None = Query(None),
+    department_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
     """
     List all meetings in the system.
@@ -109,8 +116,33 @@ async def list_meetings(
     In a real-world scenario, we would filter this by department or 
     user involvement, but for the MVP we show all.
     """
-    result = await db.execute(select(Meeting).order_by(Meeting.scheduled_at.asc()))
-    return result.scalars().all()
+    filters = []
+    if status_filter:
+        filters.append(Meeting.status == status_filter)
+    if client_id is not None:
+        filters.append(Meeting.client_id == client_id)
+    if created_by is not None:
+        filters.append(Meeting.created_by == created_by)
+    if department_id is not None:
+        filters.append(Meeting.department_id == department_id)
+    if current_user.role not in ["CEO", "Admin"]:
+        filters.append(
+            (Meeting.client_id == current_user.id) |
+            (Meeting.created_by == current_user.id) |
+            (Meeting.department_id == current_user.department_id)
+        )
+
+    total = (await db.execute(select(func.count(Meeting.id)).where(*filters))).scalar_one()
+    result = await db.execute(
+        select(Meeting)
+        .where(*filters)
+        .order_by(Meeting.scheduled_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = result.scalars().all()
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}
 
 
 # ═══════════════════════════════════════════════════════════════════════

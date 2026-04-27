@@ -21,16 +21,18 @@ API Routes (all prefixed with /api/v1/projects):
     DELETE /{project_id}  — Delete a project
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any, List
+from sqlalchemy import func
 
 from app.db.database import get_db
-from app.db.models import Project, User
+from app.db.models import Project, User, project_members
 from app.schemas.project import (
     Project as ProjectSchema,
     ProjectCreate,
+    ProjectListResponse,
     ProjectUpdate,
     ProjectRequest,
 )
@@ -90,10 +92,15 @@ async def create_project(
 # ═══════════════════════════════════════════════════════════════════════
 # GET /projects — List all projects
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/", response_model=List[ProjectSchema])
+@router.get("/", response_model=ProjectListResponse)
 async def list_projects(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(None, alias="status"),
+    client_id: int | None = Query(None),
+    member_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
     """
     List all projects in the system.
@@ -105,8 +112,36 @@ async def list_projects(
         List[ProjectSchema]: All project records in the database.
     """
     # SELECT * FROM projects
-    result = await db.execute(select(Project))
-    return result.scalars().all()
+    filters = []
+    if status_filter:
+        filters.append(Project.status == status_filter)
+    if client_id is not None:
+        filters.append(Project.client_id == client_id)
+
+    count_stmt = select(func.count(func.distinct(Project.id)))
+    list_stmt = select(Project)
+    if member_id is not None:
+        count_stmt = count_stmt.select_from(Project).join(project_members, project_members.c.project_id == Project.id)
+        list_stmt = list_stmt.join(project_members, project_members.c.project_id == Project.id)
+        filters.append(project_members.c.user_id == member_id)
+    else:
+        count_stmt = count_stmt.select_from(Project)
+
+    if current_user.role not in ["CEO", "Admin"]:
+        list_stmt = list_stmt.outerjoin(project_members, project_members.c.project_id == Project.id)
+        count_stmt = count_stmt.outerjoin(project_members, project_members.c.project_id == Project.id)
+        filters.append((Project.client_id == current_user.id) | (project_members.c.user_id == current_user.id))
+
+    count_stmt = count_stmt.where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    stmt = list_stmt.where(*filters).order_by(Project.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    items = result.scalars().unique().all()
+    for project in items:
+        project.member_ids = [member.id for member in project.members]
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -5,7 +5,7 @@ Schemas for meeting management and scheduling.
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -48,3 +48,12 @@ class MeetingInDBBase(MeetingBase):
 class Meeting(MeetingInDBBase):
     """Public Meeting schema returned in API responses."""
     pass
+
+class MeetingListResponse(BaseModel):
+    """Paginated response for meeting listing endpoints."""
+    items: List[Meeting]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
+

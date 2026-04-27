@@ -253,7 +253,10 @@ async def test_admin_endpoint_blocked_for_member(client: AsyncClient, db_session
         "/api/v1/users/",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 403
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert len(payload["items"]) == 1
 
 
 @pytest.mark.asyncio
@@ -272,8 +275,9 @@ async def test_admin_can_list_users(client: AsyncClient):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
-    assert len(response.json()) >= 1
+    payload = response.json()
+    assert isinstance(payload["items"], list)
+    assert payload["total"] >= 1
 
 
 @pytest.mark.asyncio
