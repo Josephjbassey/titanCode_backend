@@ -28,6 +28,12 @@ The fastest way to get started is using Docker Compose:
    # Edit .env with your secrets
    ```
 
+   For local development, you can keep `ENVIRONMENT=development` and use bootstrap defaults.
+   For non-dev environments, you **must** set:
+   - `ENVIRONMENT=staging` (or `production`)
+   - `FIRST_SUPERUSER_PASSWORD=<strong-unique-password>` (must not be the repo default)
+   - `AUTO_SEED_DEFAULT_ADMIN=false` (recommended after initial bootstrap)
+
 2. **Run Services**:
    ```bash
    docker-compose up -d --build
@@ -42,9 +48,31 @@ The fastest way to get started is using Docker Compose:
 
 ## 🔐 Authentication & Roles
 
-By default, the system boots with a **CEO** account:
+In development/test environments, the system can bootstrap with a **CEO** account:
 - **Email**: `admin@titancode.com`
 - **Password**: `TitanCodeAdmin123!`
+
+> ⚠️ In non-dev environments, the app now fails fast if `FIRST_SUPERUSER_PASSWORD`
+> is left on the default value (`TitanCodeAdmin123!`).
+
+### 🔒 Secure Bootstrap Workflow (Staging/Production)
+
+1. Set secure environment variables before first start:
+   ```bash
+   ENVIRONMENT=production
+   FIRST_SUPERUSER=admin@yourcompany.com
+   FIRST_SUPERUSER_PASSWORD='<long-random-password>'
+   AUTO_SEED_DEFAULT_ADMIN=true
+   ```
+2. Start the API once so the admin account is created.
+3. Log in as the seeded admin and create a secondary break-glass/admin user.
+4. Rotate `FIRST_SUPERUSER_PASSWORD` to a value not used for login (or remove it from runtime secret set).
+5. Disable future auto-seeding:
+   ```bash
+   AUTO_SEED_DEFAULT_ADMIN=false
+   ```
+
+See `DEPLOYMENT.md` for environment-by-environment guidance.
 
 ### Roles:
 - **CEO / Admin**: Full access to all endpoints (Wallets, Apps, User lists).
