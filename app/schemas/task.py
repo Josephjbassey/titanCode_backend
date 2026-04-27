@@ -7,7 +7,7 @@ Status lifecycle: open → in_progress → completed
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -46,3 +46,12 @@ class TaskInDBBase(TaskBase):
 class Task(TaskInDBBase):
     """Public Task schema returned in API responses."""
     pass
+
+class TaskListResponse(BaseModel):
+    """Paginated response for task listing endpoints."""
+    items: List[Task]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
+

@@ -21,7 +21,7 @@ API Routes (all prefixed with /api/v1/tasks):
     DELETE /{task_id}   — Delete a task
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -29,11 +29,13 @@ from typing import Any, List
 
 from app.db.database import get_db
 from app.db.models import Task, User
-from app.schemas.task import Task as TaskSchema, TaskCreate, TaskUpdate
+from app.schemas.task import Task as TaskSchema, TaskCreate, TaskListResponse, TaskUpdate
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.core.notifications import manager as notification_manager
 from app.core.email import send_email
 from sqlalchemy import select as sa_select
+from sqlalchemy import func
+from app.db.models import Project
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -120,10 +122,15 @@ async def create_task(
 # ═══════════════════════════════════════════════════════════════════════
 # GET /tasks — List all tasks
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/", response_model=List[TaskSchema])
+@router.get("/", response_model=TaskListResponse)
 async def list_tasks(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(None, alias="status"),
+    project_id: int | None = Query(None),
+    assigned_user: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
     """
     List all tasks in the system.
@@ -136,8 +143,28 @@ async def list_tasks(
         List[TaskSchema]: All task records in the database.
     """
     # SELECT * FROM tasks
-    result = await db.execute(select(Task))
-    return result.scalars().all()
+    filters = []
+    if status_filter:
+        filters.append(Task.status == status_filter)
+    if project_id is not None:
+        filters.append(Task.project_id == project_id)
+    if assigned_user is not None:
+        filters.append(Task.assigned_user == assigned_user)
+
+    count_stmt = select(func.count(Task.id)).select_from(Task)
+    stmt = select(Task)
+    if current_user.role not in ["CEO", "Admin"]:
+        stmt = stmt.join(Project, Project.id == Task.project_id)
+        count_stmt = count_stmt.join(Project, Project.id == Task.project_id)
+        filters.append((Task.assigned_user == current_user.id) | (Project.client_id == current_user.id))
+
+    total = (await db.execute(count_stmt.where(*filters))).scalar_one()
+    result = await db.execute(
+        stmt.where(*filters).order_by(Task.created_at.desc()).offset(offset).limit(limit)
+    )
+    items = result.scalars().all()
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}
 
 
 # ═══════════════════════════════════════════════════════════════════════

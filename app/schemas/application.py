@@ -10,7 +10,7 @@ Workflow:
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -47,3 +47,12 @@ class ApplicationInDBBase(ApplicationBase):
 class Application(ApplicationInDBBase):
     """Public Application schema returned in API responses."""
     pass
+
+class ApplicationListResponse(BaseModel):
+    """Paginated response for application listing endpoints."""
+    items: List[Application]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
+

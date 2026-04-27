@@ -5,7 +5,7 @@ This module manages the corporate treasury (Company Wallet) and user payouts.
 It implements a secure withdrawal workflow with status tracking.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any, List
@@ -18,13 +18,15 @@ from app.schemas.financials import (
     Withdrawal as WithdrawalSchema, 
     WithdrawalCreate, 
     WithdrawalAction,
-    PayoutInvoice as PayoutInvoiceSchema
+    PayoutInvoice as PayoutInvoiceSchema,
+    WithdrawalListResponse,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.core.rate_limiter import limiter
 from app.core.notifications import manager as notification_manager
 from app.core.email import send_email
 from starlette.requests import Request
+from sqlalchemy import func
 
 # Create the router
 router = APIRouter()
@@ -106,8 +108,12 @@ async def request_withdrawal(
 # ═══════════════════════════════════════════════════════════════════════
 # GET /financials/withdrawals — View Requests
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/withdrawals", response_model=List[WithdrawalSchema])
+@router.get("/withdrawals", response_model=WithdrawalListResponse)
 async def list_withdrawals(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(None, alias="status"),
+    user_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Any:
@@ -116,11 +122,26 @@ async def list_withdrawals(
     - Admins see all requests across the platform.
     - Users see only their own requests.
     """
+    filters = []
+    if status_filter:
+        filters.append(Withdrawal.status == status_filter)
     if current_user.role in ["CEO", "Admin"]:
-        result = await db.execute(select(Withdrawal).order_by(Withdrawal.created_at.desc()))
+        if user_id is not None:
+            filters.append(Withdrawal.user_id == user_id)
     else:
-        result = await db.execute(select(Withdrawal).where(Withdrawal.user_id == current_user.id).order_by(Withdrawal.created_at.desc()))
-    return result.scalars().all()
+        filters.append(Withdrawal.user_id == current_user.id)
+
+    total = (await db.execute(select(func.count(Withdrawal.id)).where(*filters))).scalar_one()
+    result = await db.execute(
+        select(Withdrawal)
+        .where(*filters)
+        .order_by(Withdrawal.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = result.scalars().all()
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}
 
 
 # ═══════════════════════════════════════════════════════════════════════
