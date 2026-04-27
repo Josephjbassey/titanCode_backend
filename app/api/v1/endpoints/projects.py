@@ -224,7 +224,7 @@ async def update_project(
             user_id=project.client_id,
             message={
                 "type": "project_update",
-                "title": f"Project Update: {project.project_name}",
+                "title": f"Project Update: {project.name}",
                 "message": status_note,
                 "project_id": project.id,
                 "status": project.status,
@@ -235,11 +235,11 @@ async def update_project(
         if client and client.email:
             await send_email(
                 recipient_email=client.email,
-                subject=f"Project Update: {project.project_name} — {status_display}",
+                subject=f"Project Update: {project.name} — {status_display}",
                 body=(
                     f"Hi {client.full_name},\n\n"
                     f"{status_note}\n\n"
-                    f"Project: {project.project_name}\n"
+                    f"Project: {project.name}\n"
                     f"Status:  {status_display}\n\n"
                     f"If you have any questions, just reply to this email.\n\n"
                     f"— The TitanCode Team"
@@ -248,7 +248,7 @@ async def update_project(
                     f"<p>Hi <strong>{client.full_name}</strong>,</p>"
                     f"<p>{status_note}</p>"
                     f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
-                    f"<tr><td style='padding:6px;font-weight:bold;'>Project</td><td style='padding:6px;'>{project.project_name}</td></tr>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Project</td><td style='padding:6px;'>{project.name}</td></tr>"
                     f"<tr><td style='padding:6px;font-weight:bold;'>Status</td><td style='padding:6px;'>{status_display}</td></tr>"
                     f"</table>"
                     f"<p>If you have any questions, just reply to this email.</p>"
@@ -264,7 +264,7 @@ async def update_project(
                 message={
                     "type": "project_assigned",
                     "title": "Added to Project 🚀",
-                    "message": f"You've been added to the project: {project.project_name}",
+                    "message": f"You've been added to the project: {project.name}",
                     "project_id": project.id,
                 },
             )
