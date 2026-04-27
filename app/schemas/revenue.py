@@ -28,9 +28,9 @@ class RevenueCreate(RevenueBase):
 class RevenueReport(BaseModel):
     """
     EXTERNAL API SCHEMA: Used by products to report their earnings.
-    The product is identified by its secret API key.
+    Authentication metadata (api key, signature, timestamp, nonce)
+    is supplied via HTTP headers.
     """
-    api_key: str = Field(..., description="The unique secret key for the reporting product")
     amount: Decimal = Field(..., ge=0, description="The revenue amount to report")
     source: Optional[str] = Field(None, description="Where this revenue came from (e.g. 'Paypal')")
 
