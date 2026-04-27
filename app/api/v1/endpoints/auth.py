@@ -44,6 +44,30 @@ router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 
+
+
+def _raise_unapproved_account(status_value: str | None) -> None:
+    """Raise a consistent 403 error for accounts that are not approved."""
+    normalized_status = (status_value or "pending").lower()
+
+    if normalized_status == "rejected":
+        detail = "Your account has been rejected and cannot access this resource."
+    elif normalized_status == "pending":
+        detail = "Your account is pending approval and cannot access this resource yet."
+    else:
+        detail = f"Your account status '{normalized_status}' is not allowed to access this resource."
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=detail,
+    )
+
+
+def _ensure_user_is_approved(user: User) -> None:
+    """Ensure only approved users can authenticate or access protected routes."""
+    if (user.status or "").lower() != "approved":
+        _raise_unapproved_account(user.status)
+
 # ═══════════════════════════════════════════════════════════════════════
 # DEPENDENCY: Get the current authenticated user from the JWT
 # ═══════════════════════════════════════════════════════════════════════
@@ -109,6 +133,7 @@ async def get_current_active_user(
     Returns:
         The same user if all checks pass.
     """
+    _ensure_user_is_approved(current_user)
     return current_user
 
 
@@ -140,7 +165,7 @@ class RoleChecker:
         """
         self.allowed_roles = allowed_roles
 
-    def __call__(self, user: User = Depends(get_current_user)):
+    def __call__(self, user: User = Depends(get_current_active_user)):
         """Validate the user's role against the allowed list."""
         if user.role not in self.allowed_roles:
             raise HTTPException(
@@ -243,7 +268,13 @@ async def login(
 
     # Verify user exists and password matches
     if not user or not security.verify_password(form_data.password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    _ensure_user_is_approved(user)
 
     # Generate both tokens
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -322,4 +353,5 @@ async def read_current_user(
     Requires a valid access token in the Authorization header.
     This is useful for the frontend to fetch user data after login.
     """
+    _ensure_user_is_approved(current_user)
     return current_user
