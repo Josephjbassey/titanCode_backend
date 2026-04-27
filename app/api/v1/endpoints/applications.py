@@ -28,8 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any, List
 
-from app.core.notifications import manager as notification_manager
-from app.core.email import send_email
 
 from app.db.database import get_db
 from app.db.models import Application, User, Department
@@ -38,6 +36,7 @@ from app.schemas.application import (
     ApplicationCreate,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -199,7 +198,7 @@ async def approve_application(
     await db.refresh(application)
 
     # Step 6: Send a real-time WebSocket notification to the applicant
-    await notification_manager.send_personal_message(
+    enqueue_websocket_task(
         user_id=application.user_id,
         message={
             "type": "approval",
@@ -210,7 +209,7 @@ async def approve_application(
 
     # Step 7: Send email notification to the applicant
     if applicant and applicant.email:
-        await send_email(
+        enqueue_email_task(
             recipient_email=applicant.email,
             subject="🎉 Your TitanCode Application Has Been Approved!",
             body=(
@@ -282,7 +281,7 @@ async def reject_application(
     await db.refresh(application)
 
     # Step 5: Send a real-time WebSocket notification to the applicant
-    await notification_manager.send_personal_message(
+    enqueue_websocket_task(
         user_id=application.user_id,
         message={
             "type": "approval",
@@ -296,7 +295,7 @@ async def reject_application(
     applicant_res = await db.execute(select(User).where(User.id == application.user_id))
     rejected_applicant = applicant_res.scalars().first()
     if rejected_applicant and rejected_applicant.email:
-        await send_email(
+        enqueue_email_task(
             recipient_email=rejected_applicant.email,
             subject="Update on Your TitanCode Application",
             body=(

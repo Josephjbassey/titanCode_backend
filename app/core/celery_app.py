@@ -1,28 +1,21 @@
 """
 TitanCode Technologies — Celery Worker Configuration
 =====================================================
-Celery is used for running "background tasks"—long-running code 
-that doesn't need to block the user API response.
-
-This file sets up the Celery application and its connection to Redis.
+Celery is used for background execution of side effects so API requests
+can return quickly and reliably.
 """
 
 from celery import Celery
+
 from app.core.config import settings
 
-# ── Celery App Definition ─────────────────────────────────────────────
-# broker:   The "post office" (Redis) where messages are sent.
-# backend:  The storage (Redis) for results/status of tasks.
-# include:  A list of modules where Celery should look for tasks.
 celery_app = Celery(
     "titancode_worker",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.core.tasks", "app.tasks.financials"]
+    include=["app.core.tasks", "app.tasks.financials"],
 )
 
-# ── Hardening & Best Practices ────────────────────────────────────────
-# We use standard JSON serialization for safety and compatibility.
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -30,6 +23,16 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    # Automatically retry if Redis goes down temporarily on startup
-    broker_connection_retry_on_startup=True
+    broker_connection_retry_on_startup=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_default_queue="default",
+    task_create_missing_queues=True,
+    task_routes={
+        "record_dead_letter": {"queue": "dead_letter"},
+        "send_async_email": {"queue": "notifications"},
+        "send_websocket_notification": {"queue": "notifications"},
+    },
+    # Helps prevent lost tasks during worker crashes/restarts.
+    broker_transport_options={"visibility_timeout": 3600},
 )
