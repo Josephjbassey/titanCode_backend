@@ -56,3 +56,12 @@ class ProjectInDBBase(ProjectBase):
 class Project(ProjectInDBBase):
     """Public Project schema returned in API responses."""
     member_ids: Optional[List[int]] = None
+
+class ProjectListResponse(BaseModel):
+    """Paginated response for project listing endpoints."""
+    items: List[Project]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
+

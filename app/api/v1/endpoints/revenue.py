@@ -9,9 +9,9 @@ import hashlib
 import hmac
 import time
 from decimal import Decimal
-from typing import Any, List
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from redis.asyncio import Redis
 from sqlalchemy import func
@@ -22,7 +22,7 @@ from app.api.v1.endpoints.auth import RoleChecker
 from app.core.config import settings
 from app.db.database import get_db
 from app.db.models import CompanyWallet, Product, Revenue
-from app.schemas.revenue import Revenue as RevenueSchema, RevenueReport, RevenueStats
+from app.schemas.revenue import Revenue as RevenueSchema, RevenueListResponse, RevenueReport, RevenueStats
 
 # Create the router
 router = APIRouter()
@@ -199,8 +199,12 @@ async def get_revenue_stats(
 # ═══════════════════════════════════════════════════════════════════════
 # GET /revenue/history — List all reports (Admin)
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/history", response_model=List[RevenueSchema])
+@router.get("/history", response_model=RevenueListResponse)
 async def get_revenue_history(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    product_id: int | None = Query(None),
+    source: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _current_user: Any = Depends(allow_admins),
 ) -> Any:
@@ -210,5 +214,20 @@ async def get_revenue_history(
     Returns:
         List[RevenueSchema]: History sorted by date, descending.
     """
-    result = await db.execute(select(Revenue).order_by(Revenue.created_at.desc()))
-    return result.scalars().all()
+    filters = []
+    if product_id is not None:
+        filters.append(Revenue.product_id == product_id)
+    if source:
+        filters.append(Revenue.source.ilike(f"%{source.strip()}%"))
+
+    total = (await db.execute(select(func.count(Revenue.id)).where(*filters))).scalar_one()
+    result = await db.execute(
+        select(Revenue)
+        .where(*filters)
+        .order_by(Revenue.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = result.scalars().all()
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}

@@ -6,7 +6,7 @@ external products.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
 
@@ -49,3 +49,12 @@ class RevenueStats(BaseModel):
     total_revenue: Decimal
     product_count: int
     last_report_at: Optional[datetime] = None
+
+class RevenueListResponse(BaseModel):
+    """Paginated response for revenue history endpoints."""
+    items: List[Revenue]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
+

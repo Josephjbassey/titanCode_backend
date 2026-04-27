@@ -16,14 +16,15 @@ API Routes (all prefixed with /api/v1/users):
     DELETE /{user_id}   — Delete a user permanently
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import Any, List
+from typing import Any
+from sqlalchemy import func
 
 from app.db.database import get_db
 from app.db.models import User
-from app.schemas.user import User as UserSchema, UserUpdate
+from app.schemas.user import User as UserSchema, UserListResponse, UserUpdate
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 
 # Create a new router instance — this is registered in main.py
@@ -40,10 +41,16 @@ allow_ceo = RoleChecker(["CEO"])                  # Only CEO can access
 # ═══════════════════════════════════════════════════════════════════════
 # GET /users — List all users
 # ═══════════════════════════════════════════════════════════════════════
-@router.get("/", response_model=List[UserSchema])
+@router.get("/", response_model=UserListResponse)
 async def list_users(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    role: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    department_id: int | None = Query(None),
+    search: str | None = Query(None, min_length=1),
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(allow_admin),
+    current_user: User = Depends(get_current_user),
 ) -> Any:
     """
     Retrieve all users in the system.
@@ -57,8 +64,27 @@ async def list_users(
         List[UserSchema]: A list of all user records in the database.
     """
     # SELECT * FROM users
-    result = await db.execute(select(User))
-    return result.scalars().all()
+    filters = []
+    if current_user.role not in ["CEO", "Admin"]:
+        filters.append(User.id == current_user.id)
+    if role:
+        filters.append(User.role == role)
+    if status_filter:
+        filters.append(User.status == status_filter)
+    if department_id is not None:
+        filters.append(User.department_id == department_id)
+    if search:
+        query = f"%{search.strip()}%"
+        filters.append((User.full_name.ilike(query)) | (User.email.ilike(query)))
+
+    count_stmt = select(func.count()).select_from(User).where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    stmt = select(User).where(*filters).order_by(User.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    items = result.scalars().all()
+    next_offset = offset + limit if offset + limit < total else None
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "next_offset": next_offset}
 
 
 # ═══════════════════════════════════════════════════════════════════════

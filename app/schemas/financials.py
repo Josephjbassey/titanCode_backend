@@ -74,3 +74,12 @@ class PayoutInvoice(PayoutInvoiceBase):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+class WithdrawalListResponse(BaseModel):
+    """Paginated response for withdrawal listing endpoints."""
+    items: List[Withdrawal]
+    total: int
+    limit: int
+    offset: int
+    next_offset: Optional[int] = None
+
