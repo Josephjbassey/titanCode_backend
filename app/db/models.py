@@ -311,13 +311,15 @@ class Transaction(Base):
 class Product(Base):
     """
     Represents an external or internal tool (e.g. SaaS) that generates revenue.
-    Each product has a secret `api_key` used to report earnings automatically.
+    Each product has a secret API key used to report earnings automatically.
+    The raw key is never stored; we persist a key-id + hash.
 
     Columns:
         id:               Primary key.
         name:             Product name (e.g. "TitanChat", "CodeGuard").
         product_type:     SaaS | Internal Tool | API Service.
-        api_key:          Unique key used by the product to authenticate reports.
+        api_key_id:       Public key identifier prefix for lookup.
+        api_key_hash:     HMAC-SHA256 digest used for API key verification.
         revenue_endpoint: URL where the product sends revenue data.
         product_url:      The public URL of the product.
         created_by:       FK → users.id — the admin who registered the product.
@@ -328,7 +330,8 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     product_type = Column(String(100), nullable=True)
-    api_key = Column(String(255), unique=True, index=True, nullable=False)
+    api_key_id = Column(String(64), unique=True, index=True, nullable=False)
+    api_key_hash = Column(String(255), unique=True, index=True, nullable=False)
     revenue_endpoint = Column(String(500), nullable=True)
     product_url = Column(String(500), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)

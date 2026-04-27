@@ -16,6 +16,7 @@ from app.db.database import get_db
 from app.db.models import Revenue, Product, CompanyWallet
 from app.schemas.revenue import Revenue as RevenueSchema, RevenueReport, RevenueStats
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.security import extract_product_api_key_id, hash_product_api_key
 
 # Create the router
 router = APIRouter()
@@ -46,10 +47,15 @@ async def report_revenue(
     Returns:
         RevenueSchema: The saved revenue record.
     """
-    # 1. Authenticate the product via its API key
-    result = await db.execute(select(Product).where(Product.api_key == report.api_key))
+    # 1. Authenticate the product via its API key (id + hash check)
+    try:
+        api_key_id = extract_product_api_key_id(report.api_key)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    result = await db.execute(select(Product).where(Product.api_key_id == api_key_id))
     product = result.scalars().first()
-    if not product:
+    if not product or product.api_key_hash != hash_product_api_key(report.api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # 2. Record the revenue entry
