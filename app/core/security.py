@@ -17,7 +17,10 @@ Usage:
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
 
+import hashlib
+import hmac
 import jwt
+import secrets
 from passlib.context import CryptContext
 
 from app.core.config import settings
@@ -157,3 +160,45 @@ def decode_magic_link_token(token: str) -> str:
         raise ValueError("Magic link has expired")
     except jwt.InvalidTokenError:
         raise ValueError("Invalid magic link token")
+
+
+def generate_product_api_key() -> tuple[str, str]:
+    """
+    Generate a product API key and its public key-id segment.
+
+    Format: `tc_<key_id>_<secret>`
+    """
+    key_id = secrets.token_hex(8)
+    secret = secrets.token_urlsafe(32)
+    return f"tc_{key_id}_{secret}", key_id
+
+
+def extract_product_api_key_id(api_key: str) -> str:
+    """
+    Extract the key-id from a product API key.
+    """
+    parts = api_key.split("_", 2)
+    if len(parts) != 3 or parts[0] != "tc" or not parts[1] or not parts[2]:
+        raise ValueError("Invalid API key format")
+    return parts[1]
+
+
+def hash_product_api_key(api_key: str) -> str:
+    """
+    Create a deterministic HMAC-SHA256 digest for API key lookup/verification.
+    """
+    digest = hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        api_key.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return digest
+
+
+def mask_product_api_key(api_key: str) -> str:
+    """
+    Return a redacted API key suitable for API responses/logging.
+    """
+    if len(api_key) <= 10:
+        return "********"
+    return f"{api_key[:7]}...{api_key[-4:]}"

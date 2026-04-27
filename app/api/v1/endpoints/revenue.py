@@ -134,7 +134,7 @@ async def report_revenue(
     # Authenticate the product via API key provided in header
     result = await db.execute(select(Product).where(Product.api_key == x_api_key))
     product = result.scalars().first()
-    if not product:
+    if not product or product.api_key_hash != hash_product_api_key(report.api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # Block replay only after API key is validated against a real product

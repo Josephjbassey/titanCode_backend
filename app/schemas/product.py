@@ -52,14 +52,23 @@ class ProductInDBBase(ProductBase):
     Internal base schema including server-generated fields.
     """
     id: int
-    api_key: str
+    api_key_id: str
+    api_key_masked: str
     created_at: datetime
     created_by: int
 
     model_config = {"from_attributes": True}
 
-class Product(ProductInDBBase):
+
+class ProductPublic(ProductInDBBase):
     """
-    The final Product schema returned in API responses.
+    Product schema returned by list/get endpoints.
     """
     pass
+
+
+class ProductWithSecret(ProductPublic):
+    """
+    Product schema returned when creating a product (includes raw key once).
+    """
+    api_key: str
