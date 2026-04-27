@@ -10,8 +10,8 @@ Usage:
     print(settings.SECRET_KEY)
 """
 
-from typing import List, Union, Optional
-from pydantic import field_validator, EmailStr
+from typing import Optional
+from pydantic import EmailStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,11 +32,14 @@ class Settings(BaseSettings):
                                     (e.g. postgresql+asyncpg://user:pass@host/db).
     """
 
+    ENVIRONMENT: str = "development"
+
     PROJECT_NAME: str = "TitanCode Technologies Backend Service"
 
     # Admin Seeding
     FIRST_SUPERUSER: EmailStr = "admin@titancode.com"
     FIRST_SUPERUSER_PASSWORD: str = "TitanCodeAdmin123!"  # Default for dev, override in .env
+    AUTO_SEED_DEFAULT_ADMIN: bool = True
 
     API_V1_STR: str = "/api/v1"
 
@@ -96,6 +99,24 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
+
+    @property
+    def is_dev_environment(self) -> bool:
+        """Return True for local/dev/test environments where bootstrap defaults are allowed."""
+        return self.ENVIRONMENT.lower() in {"dev", "development", "local", "test", "testing"}
+
+    @model_validator(mode="after")
+    def validate_secure_bootstrap_defaults(self):
+        """Fail fast when insecure bootstrap defaults are used outside dev/test."""
+        insecure_default_password = self.FIRST_SUPERUSER_PASSWORD == "TitanCodeAdmin123!"
+
+        if not self.is_dev_environment and insecure_default_password:
+            raise ValueError(
+                "FIRST_SUPERUSER_PASSWORD must be overridden with a non-default secret "
+                "when ENVIRONMENT is not development/test."
+            )
+
+        return self
 
 
 # Singleton instance — import this throughout the app

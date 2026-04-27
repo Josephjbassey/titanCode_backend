@@ -8,7 +8,7 @@ This is the main FastAPI application file. It:
 3. Registers all API routers.
 4. Runs startup logic via the `lifespan` context manager:
    - Initializes structured JSON logging.
-   - Seeds the default CEO admin account (admin@titancode.com).
+   - Optionally seeds the default CEO admin account.
 5. Provides a health check endpoint at GET /.
 
 To run locally:
@@ -58,21 +58,21 @@ async def seed_default_admin():
     """
     async with AsyncSessionLocal() as session:
         # Check if the admin account already exists
-        stmt = select(User).where(User.email == "admin@titancode.com")
+        stmt = select(User).where(User.email == settings.FIRST_SUPERUSER)
         result = await session.execute(stmt)
         existing = result.scalars().first()
 
         if not existing:
             admin = User(
                 full_name="TitanCode Admin",
-                email="admin@titancode.com",
+                email=settings.FIRST_SUPERUSER,
                 password_hash=security.get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
                 role="CEO",
                 status="approved",
             )
             session.add(admin)
             await session.commit()
-            logger.info("Default admin account created: admin@titancode.com")
+            logger.info("Default admin account created: %s", settings.FIRST_SUPERUSER)
         else:
             logger.info("Default admin account already exists, skipping seed.")
 
@@ -95,8 +95,14 @@ async def lifespan(app: FastAPI):
     # Step 1: Initialize structured JSON logging (must be first)
     setup_logging()
 
-    # Step 2: Seed the default admin account
-    await seed_default_admin()
+    # Step 2: Seed the default admin account only when explicitly enabled
+    if settings.AUTO_SEED_DEFAULT_ADMIN:
+        await seed_default_admin()
+    else:
+        logger.info(
+            "Skipping default admin seed because AUTO_SEED_DEFAULT_ADMIN is disabled for ENVIRONMENT=%s",
+            settings.ENVIRONMENT,
+        )
 
     yield  # ← Application runs here, handling requests
 
