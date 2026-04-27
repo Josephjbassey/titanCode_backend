@@ -82,7 +82,7 @@ services:
   celery_worker:
     build: .
     container_name: titancode_worker
-    command: celery -A app.core.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app worker --loglevel=info -Q default,notifications,dead_letter
     volumes:
       - .:/app
     env_file:

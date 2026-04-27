@@ -31,8 +31,7 @@ from app.db.database import get_db
 from app.db.models import Task, User
 from app.schemas.task import Task as TaskSchema, TaskCreate, TaskUpdate
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
-from app.core.notifications import manager as notification_manager
-from app.core.email import send_email
+from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 from sqlalchemy import select as sa_select
 
 # Create a new router instance — this is registered in main.py
@@ -79,7 +78,7 @@ async def create_task(
         assignee = assignee_result.scalars().first()
 
         # Real-time WebSocket push
-        await notification_manager.send_personal_message(
+        enqueue_websocket_task(
             user_id=task.assigned_user,
             message={
                 "type": "task_assigned",
@@ -91,7 +90,7 @@ async def create_task(
 
         # Email notification
         if assignee and assignee.email:
-            await send_email(
+            enqueue_email_task(
                 recipient_email=assignee.email,
                 subject=f"New Task Assigned: {task.task_title}",
                 body=(

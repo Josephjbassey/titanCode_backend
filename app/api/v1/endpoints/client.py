@@ -22,14 +22,13 @@ RBAC:
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any
 
 from app.core import security
 from app.core.config import settings
-from app.core.email import send_email
 from app.db.database import get_db
 from app.db.models import ClientInquiry as ClientInquiryModel, User
 from app.schemas.client import (
@@ -39,6 +38,7 @@ from app.schemas.client import (
     MagicLinkOnboardResponse,
 )
 from app.api.v1.endpoints.auth import RoleChecker
+from app.core.tasks import enqueue_email_task
 
 router = APIRouter()
 
@@ -77,7 +77,7 @@ async def hire_us(
 
     # Send notification email to HR team
     hr_email = settings.EMAILS_FROM_EMAIL or "info@titancode.com"
-    await send_email(
+    enqueue_email_task(
         recipient_email=hr_email,
         subject=f"🔔 New Hire Inquiry: {inquiry_in.full_name} — {inquiry_in.company or 'No Company'}",
         body=(
@@ -104,7 +104,7 @@ async def hire_us(
     )
 
     # Auto-reply to the prospect acknowledging receipt
-    await send_email(
+    enqueue_email_task(
         recipient_email=inquiry_in.email,
         subject="We received your inquiry — TitanCode Technologies",
         body=(
@@ -202,7 +202,7 @@ async def send_magic_link(
     magic_link = f"{frontend_url}/onboard?token={token}"
 
     # Step 7: Send invitation email
-    await send_email(
+    enqueue_email_task(
         recipient_email=email,
         subject="You're invited to TitanCode — Activate Your Client Account",
         body=(
@@ -316,7 +316,7 @@ async def onboard_client(
     refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
     # Send a welcome email
-    await send_email(
+    enqueue_email_task(
         recipient_email=email,
         subject="Welcome to TitanCode Technologies! 🎉",
         body=(

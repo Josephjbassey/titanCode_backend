@@ -35,9 +35,8 @@ from app.schemas.project import (
     ProjectRequest,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 from app.tasks.financials import process_payout_calculation
-from app.core.notifications import manager as notification_manager
-from app.core.email import send_email
 
 # Create a new router instance — this is registered in main.py
 router = APIRouter()
@@ -204,7 +203,6 @@ async def update_project(
         process_payout_calculation.delay(project.id)
 
     # Step 6: Notify client on status change
-    old_status = project.status  # Already updated above, track via trigger_payout flag
     if project_in.status and project.client_id:
         # Fetch client info for the email
         client_result = await db.execute(select(User).where(User.id == project.client_id))
@@ -220,7 +218,7 @@ async def update_project(
         status_note = status_messages.get(project.status, f"Status changed to: {project.status}")
 
         # WebSocket real-time push
-        await notification_manager.send_personal_message(
+        enqueue_websocket_task(
             user_id=project.client_id,
             message={
                 "type": "project_update",
@@ -233,7 +231,7 @@ async def update_project(
 
         # Email notification to client
         if client and client.email:
-            await send_email(
+            enqueue_email_task(
                 recipient_email=client.email,
                 subject=f"Project Update: {project.name} — {status_display}",
                 body=(
@@ -259,7 +257,7 @@ async def update_project(
     # Step 7: Notify newly assigned team members
     if project_in.member_ids is not None:
         for member_id in project_in.member_ids:
-            await notification_manager.send_personal_message(
+            enqueue_websocket_task(
                 user_id=member_id,
                 message={
                     "type": "project_assigned",
