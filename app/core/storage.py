@@ -34,6 +34,7 @@ Usage:
 import os
 import uuid
 import shutil
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -182,16 +183,16 @@ class LocalStorage(BaseStorage):
         # Full path where the file will be saved
         file_path = folder_path / safe_filename
 
-        # Write the file to disk in chunks (memory-efficient for large files)
+        # Write the file using threadpool offload to avoid blocking the event loop
         try:
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+            await file.seek(0)
+            await asyncio.to_thread(self._write_upload_to_disk, file.file, file_path)
         finally:
             # Always close the upload file handle
             await file.close()
 
         # Get the file size after writing
-        file_size = os.path.getsize(file_path)
+        file_size = await asyncio.to_thread(os.path.getsize, file_path)
 
         logger.info(f"File saved: {file_path} ({file_size} bytes)")
 
@@ -204,6 +205,11 @@ class LocalStorage(BaseStorage):
             "path": str(file_path),  # Relative path for storage reference
             "folder": folder,
         }
+
+    @staticmethod
+    def _write_upload_to_disk(source_file, destination_path: Path) -> None:
+        with open(destination_path, "wb") as buffer:
+            shutil.copyfileobj(source_file, buffer)
 
     async def get(self, file_path: str) -> Optional[str]:
         """

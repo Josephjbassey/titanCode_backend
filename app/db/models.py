@@ -116,6 +116,29 @@ class User(Base):
     department = relationship("Department", back_populates="users", foreign_keys=[department_id])
 
 
+class StoredFile(Base):
+    """
+    Persisted metadata for uploaded files.
+
+    This table is the source of truth for file authorization decisions.
+    """
+    __tablename__ = "stored_files"
+    __table_args__ = (
+        UniqueConstraint("folder", "filename", name="uq_stored_files_folder_filename"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String(255), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    path = Column(String(500), nullable=False, unique=True)
+    content_type = Column(String(255), nullable=False)
+    size = Column(Integer, nullable=False)
+    folder = Column(String(50), nullable=False, index=True)
+    visibility = Column(String(20), nullable=False, default="private")
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # APPLICATION MODEL
 # ═══════════════════════════════════════════════════════════════════════
