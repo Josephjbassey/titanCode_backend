@@ -14,6 +14,7 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import pool
+from sqlalchemy.future import select
 
 # Disable rate limiting during tests — all tests come from 127.0.0.1
 # and would quickly exceed the 5/minute login limit.
@@ -21,6 +22,7 @@ os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 from app.core.config import settings
 from app.db.database import get_db
+from app.db.models import User
 from main import app
 
 # ── Separate test engine ───────────────────────────────────────────────
@@ -87,6 +89,13 @@ async def user_token_headers(client: AsyncClient):
         "email": email,
         "password": "SecurePass123!",
     })
+    # Approve the user so status checks allow authentication
+    async with TestSessionLocal() as session:
+        result = await session.execute(select(User).where(User.email == email))
+        user = result.scalars().first()
+        user.status = "approved"
+        await session.commit()
+
     # Login
     response = await client.post("/api/v1/auth/login", data={
         "username": email,
