@@ -5,7 +5,26 @@ import time
 
 import pytest
 
+from app.api.v1.endpoints import revenue as revenue_endpoint
 from app.db.models import Product, User
+
+
+class FakeReplayCache:
+    def __init__(self):
+        self._keys: set[str] = set()
+
+    async def set(self, name: str, value: str, ex: int, nx: bool):
+        if nx and name in self._keys:
+            return False
+        self._keys.add(name)
+        return True
+
+
+@pytest.fixture
+def fake_replay_cache(monkeypatch):
+    cache = FakeReplayCache()
+    monkeypatch.setattr(revenue_endpoint, "_get_replay_cache", lambda: cache)
+    return cache
 
 
 def _signed_headers(api_key: str, body: bytes, timestamp: int, nonce: str) -> dict[str, str]:
@@ -24,7 +43,7 @@ def _signed_headers(api_key: str, body: bytes, timestamp: int, nonce: str) -> di
 
 
 @pytest.mark.asyncio
-async def test_revenue_report_accepts_valid_signature(client, db_session):
+async def test_revenue_report_accepts_valid_signature(client, db_session, fake_replay_cache):
     admin = User(
         full_name="Revenue Admin",
         email="revenue_admin_valid@test.com",
@@ -51,7 +70,7 @@ async def test_revenue_report_accepts_valid_signature(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_revenue_report_rejects_invalid_signature(client, db_session):
+async def test_revenue_report_rejects_invalid_signature(client, db_session, fake_replay_cache):
     admin = User(
         full_name="Revenue Admin",
         email="revenue_admin_invalid@test.com",
@@ -77,7 +96,7 @@ async def test_revenue_report_rejects_invalid_signature(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_revenue_report_rejects_replayed_nonce(client, db_session):
+async def test_revenue_report_rejects_replayed_nonce(client, db_session, fake_replay_cache):
     admin = User(
         full_name="Revenue Admin",
         email="revenue_admin_replay@test.com",
@@ -104,3 +123,33 @@ async def test_revenue_report_rejects_replayed_nonce(client, db_session):
     second = await client.post("/api/v1/revenue/report", content=body, headers=headers)
     assert second.status_code == 401
     assert second.json()["detail"] == "Nonce already used"
+
+
+@pytest.mark.asyncio
+async def test_unknown_api_key_does_not_consume_nonce(client, db_session, fake_replay_cache):
+    body = json.dumps({"amount": "8.00", "source": "Unknown Key"}, separators=(",", ":")).encode("utf-8")
+    timestamp = int(time.time())
+    nonce = "nonce-unknown-key"
+    api_key = "future-real-key"
+
+    unknown_headers = _signed_headers(api_key=api_key, body=body, timestamp=timestamp, nonce=nonce)
+    rejected = await client.post("/api/v1/revenue/report", content=body, headers=unknown_headers)
+    assert rejected.status_code == 401
+    assert rejected.json()["detail"] == "Invalid API key"
+
+    admin = User(
+        full_name="Revenue Admin",
+        email="revenue_admin_late_product@test.com",
+        password_hash="hash",
+        role="CEO",
+        status="approved",
+    )
+    db_session.add(admin)
+    await db_session.flush()
+
+    product = Product(name="Revenue Tool", api_key=api_key, created_by=admin.id)
+    db_session.add(product)
+    await db_session.commit()
+
+    accepted = await client.post("/api/v1/revenue/report", content=body, headers=unknown_headers)
+    assert accepted.status_code == 201

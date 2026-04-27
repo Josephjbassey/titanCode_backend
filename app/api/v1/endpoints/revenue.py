@@ -13,11 +13,13 @@ from typing import Any, List
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import ValidationError
+from redis.asyncio import Redis
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.api.v1.endpoints.auth import RoleChecker
+from app.core.config import settings
 from app.db.database import get_db
 from app.db.models import CompanyWallet, Product, Revenue
 from app.schemas.revenue import Revenue as RevenueSchema, RevenueReport, RevenueStats
@@ -28,16 +30,18 @@ router = APIRouter()
 # ── RBAC Dependencies ──────────────────────────────────────────────────
 allow_admins = RoleChecker(["CEO", "Admin"])
 
-# Replay-protection configuration and in-memory nonce cache.
+# Replay-protection configuration
 REVENUE_SIGNATURE_MAX_AGE_SECONDS = 300
-_nonce_cache: dict[str, int] = {}
+_REPLAY_NONCE_PREFIX = "revenue:nonce"
+_replay_cache: Redis | None = None
 
 
-def _clean_expired_nonces(now: int) -> None:
-    """Drop nonces that are outside the replay-protection time window."""
-    expired = [key for key, seen_at in _nonce_cache.items() if now - seen_at > REVENUE_SIGNATURE_MAX_AGE_SECONDS]
-    for key in expired:
-        _nonce_cache.pop(key, None)
+def _get_replay_cache() -> Redis:
+    """Return a shared Redis backend for replay nonce tracking."""
+    global _replay_cache
+    if _replay_cache is None:
+        _replay_cache = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _replay_cache
 
 
 def _verify_revenue_signature(
@@ -46,8 +50,8 @@ def _verify_revenue_signature(
     signature: str,
     timestamp: str,
     nonce: str,
-) -> None:
-    """Validate request HMAC signature and enforce anti-replay checks."""
+) -> int:
+    """Validate request HMAC signature and freshness checks."""
     if not api_key or not signature or not timestamp or not nonce:
         raise HTTPException(status_code=401, detail="Missing authentication headers")
 
@@ -60,11 +64,6 @@ def _verify_revenue_signature(
     if abs(now - request_ts) > REVENUE_SIGNATURE_MAX_AGE_SECONDS:
         raise HTTPException(status_code=401, detail="Stale timestamp")
 
-    _clean_expired_nonces(now)
-    nonce_key = f"{api_key}:{nonce}"
-    if nonce_key in _nonce_cache:
-        raise HTTPException(status_code=401, detail="Nonce already used")
-
     payload_to_sign = raw_body + timestamp.encode("utf-8") + nonce.encode("utf-8")
     expected_signature = hmac.new(
         key=api_key.encode("utf-8"),
@@ -75,7 +74,25 @@ def _verify_revenue_signature(
     if not hmac.compare_digest(expected_signature, signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    _nonce_cache[nonce_key] = request_ts
+    return request_ts
+
+
+async def _assert_nonce_not_replayed(product_id: int, nonce: str) -> None:
+    """Persist nonce atomically in Redis; reject if it was seen already."""
+    nonce_key = f"{_REPLAY_NONCE_PREFIX}:{product_id}:{nonce}"
+    try:
+        cache = _get_replay_cache()
+        inserted = await cache.set(
+            name=nonce_key,
+            value="1",
+            ex=REVENUE_SIGNATURE_MAX_AGE_SECONDS,
+            nx=True,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Replay protection unavailable") from exc
+
+    if not inserted:
+        raise HTTPException(status_code=401, detail="Nonce already used")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -119,6 +136,9 @@ async def report_revenue(
     product = result.scalars().first()
     if not product or product.api_key_hash != hash_product_api_key(report.api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # Block replay only after API key is validated against a real product
+    await _assert_nonce_not_replayed(product.id, x_nonce)
 
     # Record the revenue entry
     revenue = Revenue(
