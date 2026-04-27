@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     STORAGE_TYPE: str = "local"
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
+    
+    # ── External Links ──────────────────────────────────────────────────
+    CALENDLY_URL: Optional[str] = None
 
     # Tell Pydantic to read variables from the .env file
     model_config = SettingsConfigDict(

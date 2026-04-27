@@ -104,13 +104,28 @@ async def hire_us(
     )
 
     # Auto-reply to the prospect acknowledging receipt
+    calendly_text_plain = ""
+    calendly_text_html = ""
+    calendly_url = getattr(settings, "CALENDLY_URL", None)
+    
+    if calendly_url:
+        calendly_text_plain = (
+            f"\n\nTo speed things up, you can pick a time for your consultation directly on our calendar here:\n"
+            f"{calendly_url}"
+        )
+        calendly_text_html = (
+            f"<p>To speed things up, you can pick a time for your consultation directly on our calendar "
+            f"by <a href='{calendly_url}'>clicking here</a>.</p>"
+        )
+
     enqueue_email_task(
         recipient_email=inquiry_in.email,
         subject="We received your inquiry — TitanCode Technologies",
         body=(
             f"Hi {inquiry_in.full_name},\n\n"
             f"Thank you for reaching out to TitanCode Technologies! We've received your inquiry "
-            f"and our team will be in touch with you shortly to discuss your project.\n\n"
+            f"and our team will be in touch with you shortly to discuss your project."
+            f"{calendly_text_plain}\n\n"
             f"In the meantime, feel free to reply to this email if you have any questions.\n\n"
             f"— The TitanCode Team"
         ),
@@ -119,6 +134,7 @@ async def hire_us(
             f"<p>Thank you for reaching out to <strong>TitanCode Technologies</strong>!</p>"
             f"<p>We've received your inquiry and our team will be in touch with you shortly "
             f"to discuss your project.</p>"
+            f"{calendly_text_html}"
             f"<p>In the meantime, feel free to reply to this email with any questions.</p>"
             f"<br><p>— The TitanCode Team</p>"
         ),
