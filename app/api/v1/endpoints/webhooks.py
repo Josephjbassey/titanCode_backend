@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.database import get_db
 from app.db.models import Project
-from app.tasks.financials import process_payout_calculation
+# from app.tasks.financials import process_payout_calculation # Deferred for Phase 1
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -33,9 +33,9 @@ async def handle_successful_payment(project_id: int, db_session: AsyncSession):
             project.status = "completed"
             logger.info(f"Webhook Execution: Payment Verified. Updating Project {project_id} to completed.")
 
-        # Handoff to Celery background task
-        process_payout_calculation.delay(project_id)
-        logger.info(f"Webhook Execution: Success. Payout task dispatched for Project {project_id}.")
+        # Handoff to Celery background task (DEFERRED for Phase 1 MVP)
+        # process_payout_calculation.delay(project_id)
+        # logger.info(f"Webhook Execution: Success. Payout task dispatched for Project {project_id}.")
     except Exception as e:
         logger.error(f"Failed to handle successful payment: {str(e)}")
 
