@@ -20,6 +20,7 @@ from sqlalchemy.future import select
 
 from app.api.v1.endpoints.auth import RoleChecker
 from app.core.config import settings
+from app.core.security import extract_product_api_key_id, hash_product_api_key
 from app.db.database import get_db
 from app.db.models import CompanyWallet, Product, Revenue
 from app.schemas.revenue import Revenue as RevenueSchema, RevenueListResponse, RevenueReport, RevenueStats
@@ -132,9 +133,14 @@ async def report_revenue(
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     # Authenticate the product via API key provided in header
-    result = await db.execute(select(Product).where(Product.api_key == x_api_key))
+    try:
+        api_key_id = extract_product_api_key_id(x_api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid API key format") from exc
+
+    result = await db.execute(select(Product).where(Product.api_key_id == api_key_id))
     product = result.scalars().first()
-    if not product or product.api_key_hash != hash_product_api_key(report.api_key):
+    if not product or product.api_key_hash != hash_product_api_key(x_api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # Block replay only after API key is validated against a real product

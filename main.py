@@ -35,6 +35,7 @@ from app.db.models import User
 from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing
 
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 # Configure a logger for startup events
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ if settings.cors_origins_list:
 # Default: 60 requests/minute per IP. Auth endpoints get stricter limits.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # ── Request Logging Middleware ──────────────────────────────────────────
 # Logs every HTTP request with timing, status code, and client IP.

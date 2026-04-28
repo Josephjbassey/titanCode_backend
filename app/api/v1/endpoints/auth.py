@@ -19,6 +19,7 @@ Security Utilities (used by other endpoint modules):
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -207,7 +208,7 @@ async def register(request: Request, user_in: UserCreate, db: AsyncSession = Dep
     user = User(
         email=user_in.email,
         full_name=user_in.full_name,
-        password_hash=security.get_password_hash(user_in.password),
+        password_hash=await run_in_threadpool(security.get_password_hash, user_in.password),
         country=user_in.country,
         phone_number=user_in.phone_number,
         role="Member",
@@ -267,7 +268,15 @@ async def login(
     user = result.scalars().first()
 
     # Verify user exists and password matches
-    if not user or not security.verify_password(form_data.password, user.password_hash):
+    password_matches = False
+    if user:
+        password_matches = await run_in_threadpool(
+            security.verify_password,
+            form_data.password,
+            user.password_hash,
+        )
+
+    if not user or not password_matches:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
