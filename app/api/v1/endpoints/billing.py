@@ -7,6 +7,8 @@ from app.core.pdf_generator import generate_invoice_pdf
 from app.core.tasks import enqueue_email_task
 from app.core.config import settings
 
+from fastapi.concurrency import run_in_threadpool
+
 router = APIRouter()
 
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -47,8 +49,9 @@ async def generate_invoice(
     else:
         raise HTTPException(status_code=400, detail="Invalid payment method")
     
-    # 2. Generate PDF Invoice
-    invoice_pdf_bytes = generate_invoice_pdf(
+    # 2. Generate PDF Invoice asynchronously to prevent blocking the event loop
+    invoice_pdf_bytes = await run_in_threadpool(
+        generate_invoice_pdf,
         client_name=body.client_name,
         company=body.company_name,
         items=[item.model_dump() for item in body.items],
