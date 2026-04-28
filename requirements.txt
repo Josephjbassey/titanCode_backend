@@ -22,7 +22,7 @@ pydantic-settings>=2.2.1           # Load settings from .env files
 
 # ── Authentication & Security ─────────────────────────────────────────
 pyjwt>=2.8.0                       # Create and verify JSON Web Tokens (JWT)
-stripe==8.3.0
+reportlab>=4.1.0                   # PDF invoice generation
 passlib[bcrypt]>=1.7.4             # Password hashing with bcrypt algorithm
 bcrypt==4.0.1                      # Pinned for compatibility with passlib (v4.1+ breaks it)
 

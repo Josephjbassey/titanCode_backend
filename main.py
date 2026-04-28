@@ -32,7 +32,7 @@ from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
 from app.db.database import engine, AsyncSessionLocal
 from app.db.models import User
-from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client
+from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing
 
 from slowapi.errors import RateLimitExceeded
 
@@ -161,8 +161,8 @@ app.include_router(revenue.router, prefix=f"{settings.API_V1_STR}/revenue", tags
 app.include_router(financials.router, prefix=f"{settings.API_V1_STR}/financials", tags=["financials"])
 # This router handles specialized webhooks, like payment success notifications from Stripe.
 app.include_router(webhooks.router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
-# Client onboarding: Hire Us form, magic link dispatch & activation
 app.include_router(client.router, prefix=f"{settings.API_V1_STR}/client", tags=["client"])
+app.include_router(billing.router, prefix=f"{settings.API_V1_STR}/billing", tags=["billing"])
 
 
 # ═══════════════════════════════════════════════════════════════════════
