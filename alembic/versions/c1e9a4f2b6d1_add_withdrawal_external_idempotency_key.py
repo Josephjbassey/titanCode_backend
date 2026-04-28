@@ -1,7 +1,7 @@
 """add_withdrawal_external_idempotency_key
 
 Revision ID: c1e9a4f2b6d1
-Revises: 8f3a1b2c4d5e
+Revises: c1d2e3f4a5b6
 Create Date: 2026-04-27 00:00:01
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "c1e9a4f2b6d1"
-down_revision: Union[str, Sequence[str], None] = "8f3a1b2c4d5e"
+down_revision: Union[str, Sequence[str], None] = "c1d2e3f4a5b6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
