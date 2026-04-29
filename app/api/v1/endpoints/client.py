@@ -293,21 +293,7 @@ async def list_inquiries(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    """
-    List all Hire Us form submissions.
-    Accessible only to CEO and Admin roles for CRM-style tracking.
-    """
-    filters = []
-    if status_filter:
-        filters.append(ClientInquiryModel.status == status_filter)
-    result = await db.execute(
-        select(ClientInquiryModel)
-        .where(*filters)
-        .order_by(ClientInquiryModel.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    return result.scalars().all()
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/v1/leads")
 
 
 @router.put("/inquiries/{inquiry_id}/status", response_model=ClientInquiry)
@@ -317,18 +303,7 @@ async def update_inquiry_status(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    allowed = {"new", "contacted", "qualified", "proposal_sent", "won", "lost", "converted"}
-    if body.status not in allowed:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {sorted(allowed)}")
-
-    result = await db.execute(select(ClientInquiryModel).where(ClientInquiryModel.id == inquiry_id))
-    inquiry = result.scalars().first()
-    if not inquiry:
-        raise HTTPException(status_code=404, detail="Inquiry not found")
-    inquiry.status = body.status
-    await db.commit()
-    await db.refresh(inquiry)
-    return inquiry
+    raise HTTPException(status_code=410, detail="Deprecated. Use PATCH /api/v1/leads/{lead_id}")
 
 
 @router.get("/dashboard/funnel")
@@ -336,18 +311,7 @@ async def founder_funnel_dashboard(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    total_inquiries = (await db.execute(select(func.count(ClientInquiryModel.id)))).scalar_one()
-    total_projects = (await db.execute(select(func.count()).select_from(User).where(User.role == "Client"))).scalar_one()
-    grouped = await db.execute(
-        select(ClientInquiryModel.status, func.count(ClientInquiryModel.id))
-        .group_by(ClientInquiryModel.status)
-    )
-    status_counts = {row[0]: row[1] for row in grouped.all()}
-    return {
-        "total_inquiries": total_inquiries,
-        "client_accounts": total_projects,
-        "pipeline": status_counts,
-    }
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/v1/dashboard/leads")
 
 
 # ═══════════════════════════════════════════════════════════════════════
