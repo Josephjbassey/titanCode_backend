@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Optional
+from contextlib import nullcontext
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,10 @@ class InsufficientFundsError(WalletServiceError):
     pass
 
 
+class IdempotencyConflictError(WalletServiceError):
+    pass
+
+
 class WalletService:
     @staticmethod
     async def apply_transaction(
@@ -43,7 +48,8 @@ class WalletService:
             raise WalletServiceError("Transaction type must be 'credit' or 'debit'")
 
         try:
-            async with db.begin():
+            tx_ctx = nullcontext() if db.in_transaction() else db.begin()
+            async with tx_ctx:
                 wallet_row = await db.execute(
                     select(Wallet).where(Wallet.id == wallet_id).with_for_update()
                 )
@@ -56,12 +62,14 @@ class WalletService:
                         select(Transaction).where(
                             Transaction.wallet_id == wallet_id,
                             Transaction.reference_id == reference_id,
-                            Transaction.transaction_type == transaction_type,
-                            Transaction.amount == amount,
                         )
                     )
                     existing = existing_row.scalars().first()
                     if existing:
+                        if existing.transaction_type != transaction_type or existing.amount != amount:
+                            raise IdempotencyConflictError(
+                                "Idempotency conflict: reference_id already used with different transaction payload"
+                            )
                         return existing, wallet, True
 
                 if transaction_type == "debit":
@@ -80,6 +88,8 @@ class WalletService:
                 )
                 db.add(transaction)
 
+            if db.in_transaction():
+                await db.commit()
             await db.refresh(wallet)
             await db.refresh(transaction)
             return transaction, wallet, False

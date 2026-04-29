@@ -115,6 +115,21 @@ async def convert_lead_to_project(
     lead = res.scalars().first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    if lead.status in {"won", "converted"}:
+        existing_client = (await db.execute(select(User).where(User.email == lead.email))).scalars().first()
+        if existing_client:
+            existing_project = (
+                await db.execute(
+                    select(Project)
+                    .where(Project.client_id == existing_client.id)
+                    .order_by(Project.created_at.desc())
+                )
+            ).scalars().first()
+            if existing_project:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Lead already converted to project #{existing_project.id}",
+                )
 
     user_res = await db.execute(select(User).where(User.email == lead.email))
     client = user_res.scalars().first()
@@ -138,7 +153,7 @@ async def convert_lead_to_project(
         status="pending",
     )
     db.add(project)
-    lead.status = "won"
+    lead.status = "converted"
     await db.commit()
     await db.refresh(project)
     return project

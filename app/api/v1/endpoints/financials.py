@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any, List
 from decimal import Decimal
+from contextlib import nullcontext
 
 from app.db.database import get_db
 from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, Project, utcnow
@@ -126,7 +127,8 @@ async def request_withdrawal(
     if withdrawal_in.amount <= 0:
         raise HTTPException(status_code=400, detail="Withdrawal amount must be greater than zero")
 
-    async with db.begin():
+    tx_ctx = nullcontext() if db.in_transaction() else db.begin()
+    async with tx_ctx:
         result = await db.execute(
             select(Wallet).where(Wallet.user_id == current_user.id).with_for_update()
         )
@@ -151,6 +153,8 @@ async def request_withdrawal(
                 reference_id=f"withdrawal:pending:user:{current_user.id}:{utcnow().isoformat()}",
             )
         )
+    if db.in_transaction():
+        await db.commit()
 
     await db.refresh(withdrawal)
     return withdrawal
