@@ -24,6 +24,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.future import select
+from sqlalchemy import text
+from redis.asyncio import Redis
 
 from app.core.config import settings
 from app.core import security
@@ -35,6 +37,7 @@ from app.db.models import User
 from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing
 
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 # Configure a logger for startup events
 logger = logging.getLogger(__name__)
@@ -136,6 +139,7 @@ if settings.cors_origins_list:
 # Default: 60 requests/minute per IP. Auth endpoints get stricter limits.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # ── Request Logging Middleware ──────────────────────────────────────────
 # Logs every HTTP request with timing, status code, and client IP.
@@ -176,4 +180,13 @@ async def health_check():
     Used by Docker healthchecks, load balancers, and monitoring tools
     to verify the API is running. Returns the service name and status.
     """
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SELECT 1"))
+
+    redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        await redis_client.ping()
+    finally:
+        await redis_client.close()
+
     return {"status": "healthy", "service": settings.PROJECT_NAME}
