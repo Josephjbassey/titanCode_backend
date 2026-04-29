@@ -12,7 +12,7 @@ from typing import Any, List
 from decimal import Decimal
 
 from app.db.database import get_db
-from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, utcnow
+from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, Project, utcnow
 from app.schemas.financials import (
     CompanyWallet as WalletSchema, 
     Withdrawal as WithdrawalSchema, 
@@ -39,6 +39,39 @@ WITHDRAWAL_ALLOWED_TRANSITIONS = {
     "rejected": set(),
     "paid": set(),
 }
+
+
+@router.get("/dashboard/operations")
+async def operations_dashboard(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(allow_admins),
+) -> Any:
+    pending_withdrawals = (
+        await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "pending"))
+    ).scalar_one()
+    approved_withdrawals = (
+        await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "approved"))
+    ).scalar_one()
+    paid_withdrawals = (
+        await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "paid"))
+    ).scalar_one()
+    completed_projects = (
+        await db.execute(select(func.count(Project.id)).where(Project.status == "completed"))
+    ).scalar_one()
+    pending_projects = (
+        await db.execute(select(func.count(Project.id)).where(Project.status == "pending"))
+    ).scalar_one()
+    active_projects = (
+        await db.execute(select(func.count(Project.id)).where(Project.status == "active"))
+    ).scalar_one()
+    return {
+        "projects": {"pending": pending_projects, "active": active_projects, "completed": completed_projects},
+        "withdrawals": {
+            "pending": pending_withdrawals,
+            "approved": approved_withdrawals,
+            "paid": paid_withdrawals,
+        },
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
