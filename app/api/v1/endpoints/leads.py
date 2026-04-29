@@ -67,12 +67,63 @@ async def create_lead(payload: LeadCreate, db: AsyncSession = Depends(get_db)) -
     await db.commit()
     await db.refresh(inquiry)
 
+    # 1. NOTIFY INTERNAL TEAM (HR/Admin)
     hr_email = settings.EMAILS_FROM_EMAIL or "info@titancode.com"
     enqueue_email_task(
         recipient_email=hr_email,
-        subject=f"New Lead: {payload.name}",
-        body=f"Lead {payload.name} ({payload.email}) submitted.",
-        html_content=f"<p>Lead <strong>{payload.name}</strong> ({payload.email}) submitted.</p>",
+        subject=f"[New Lead] {payload.name} - {payload.project_type or 'General Inquiry'}",
+        body=(
+            f"A new lead has submitted the 'Hire Us' form.\n\n"
+            f"Name: {payload.name}\n"
+            f"Email: {payload.email}\n"
+            f"Company: {payload.company or 'N/A'}\n"
+            f"Interest: {payload.project_type or 'N/A'}\n"
+            f"Budget: {payload.budget_range or 'N/A'}\n\n"
+            f"Message:\n{payload.description or 'No description provided'}"
+        ),
+        html_content=(
+            f"<h3>New Lead Captured</h3>"
+            f"<ul>"
+            f"<li><strong>Name:</strong> {payload.name}</li>"
+            f"<li><strong>Email:</strong> {payload.email}</li>"
+            f"<li><strong>Interest:</strong> {payload.project_type or 'N/A'}</li>"
+            f"<li><strong>Budget:</strong> {payload.budget_range or 'N/A'}</li>"
+            f"</ul>"
+            f"<p><strong>Message:</strong><br>{payload.description or 'N/A'}</p>"
+        ),
+    )
+
+    # 2. AUTO-REPLY TO CLIENT
+    calendly_section = ""
+    if settings.CALENDLY_URL:
+        calendly_section = (
+            f"\n\nTo speed things up, you can pick a time for an initial consultation on our calendar here: "
+            f"{settings.CALENDLY_URL}"
+        )
+        calendly_html = (
+            f"<p>To speed things up, you can pick a time for an initial consultation on our "
+            f"<a href='{settings.CALENDLY_URL}'>calendar here</a>.</p>"
+        )
+    else:
+        calendly_html = ""
+
+    enqueue_email_task(
+        recipient_email=payload.email,
+        subject="Thanks for reaching out to TitanCode Technologies!",
+        body=(
+            f"Hi {payload.name},\n\n"
+            f"We've received your inquiry regarding {payload.project_type or 'a new project'}. "
+            f"Our team is reviewing your details and will get back to you shortly.{calendly_section}\n\n"
+            f"Best regards,\n"
+            f"The TitanCode Team"
+        ),
+        html_content=(
+            f"<p>Hi <strong>{payload.name}</strong>,</p>"
+            f"<p>We've received your inquiry regarding <strong>{payload.project_type or 'a new project'}</strong>. "
+            f"Our team is reviewing your details and will get back to you shortly.</p>"
+            f"{calendly_html}"
+            f"<br><p>Best regards,<br><strong>The TitanCode Team</strong></p>"
+        ),
     )
     return inquiry
 
