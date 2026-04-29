@@ -22,10 +22,11 @@ RBAC:
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any
+from sqlalchemy import func
 
 from app.core import security
 from app.core.config import settings
@@ -37,6 +38,7 @@ from app.schemas.client import (
     SendMagicLinkRequest,
     MagicLinkOnboardResponse,
     SendCustomEmailRequest,
+    InquiryStatusUpdateRequest,
 )
 from app.api.v1.endpoints.auth import RoleChecker
 from app.core.tasks import enqueue_email_task
@@ -55,93 +57,10 @@ async def hire_us(
     inquiry_in: ClientInquiryCreate,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """
-    Accept a public Hire Us form submission.
-
-    This is the ONLY action required from the prospect at this stage.
-    No account creation, no password, no dashboard.
-
-    What happens:
-        1. Saves the inquiry to the database.
-        2. Sends an email notification to TitanCode HR.
-        3. Returns the created inquiry record.
-
-    The HR team then contacts the prospect manually (email, WhatsApp, etc.)
-    and schedules a consultation. After the meeting, an admin can send
-    a magic link via POST /client/send-magic-link.
-    """
-    # Save the inquiry record
-    inquiry = ClientInquiryModel(**inquiry_in.model_dump())
-    db.add(inquiry)
-    await db.commit()
-    await db.refresh(inquiry)
-
-    # Send notification email to HR team
-    hr_email = settings.EMAILS_FROM_EMAIL or "info@titancode.com"
-    enqueue_email_task(
-        recipient_email=hr_email,
-        subject=f"🔔 New Hire Inquiry: {inquiry_in.full_name} — {inquiry_in.company or 'No Company'}",
-        body=(
-            f"You have a new inquiry from the Hire Us form.\n\n"
-            f"Name:             {inquiry_in.full_name}\n"
-            f"Email:            {inquiry_in.email}\n"
-            f"Company:          {inquiry_in.company or 'N/A'}\n"
-            f"Phone:            {inquiry_in.phone or 'N/A'}\n"
-            f"Service Interest: {inquiry_in.service_interest or 'N/A'}\n\n"
-            f"Message:\n{inquiry_in.message or '(no message provided)'}\n\n"
-            f"— TitanCode Platform"
-        ),
-        html_content=(
-            f"<h2>New Hire Inquiry</h2>"
-            f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
-            f"<tr><td style='padding:8px;font-weight:bold;'>Name</td><td style='padding:8px;'>{inquiry_in.full_name}</td></tr>"
-            f"<tr><td style='padding:8px;font-weight:bold;'>Email</td><td style='padding:8px;'><a href='mailto:{inquiry_in.email}'>{inquiry_in.email}</a></td></tr>"
-            f"<tr><td style='padding:8px;font-weight:bold;'>Company</td><td style='padding:8px;'>{inquiry_in.company or 'N/A'}</td></tr>"
-            f"<tr><td style='padding:8px;font-weight:bold;'>Phone</td><td style='padding:8px;'>{inquiry_in.phone or 'N/A'}</td></tr>"
-            f"<tr><td style='padding:8px;font-weight:bold;'>Service</td><td style='padding:8px;'>{inquiry_in.service_interest or 'N/A'}</td></tr>"
-            f"</table>"
-            f"<h3>Message</h3><p>{inquiry_in.message or '(no message provided)'}</p>"
-        ),
+    raise HTTPException(
+        status_code=410,
+        detail="Deprecated endpoint. Use POST /api/v1/leads for canonical intake.",
     )
-
-    # Auto-reply to the prospect acknowledging receipt
-    calendly_text_plain = ""
-    calendly_text_html = ""
-    calendly_url = getattr(settings, "CALENDLY_URL", None)
-    
-    if calendly_url:
-        calendly_text_plain = (
-            f"\n\nTo speed things up, you can pick a time for your consultation directly on our calendar here:\n"
-            f"{calendly_url}"
-        )
-        calendly_text_html = (
-            f"<p>To speed things up, you can pick a time for your consultation directly on our calendar "
-            f"by <a href='{calendly_url}'>clicking here</a>.</p>"
-        )
-
-    enqueue_email_task(
-        recipient_email=inquiry_in.email,
-        subject="We received your inquiry — TitanCode Technologies",
-        body=(
-            f"Hi {inquiry_in.full_name},\n\n"
-            f"Thank you for reaching out to TitanCode Technologies! We've received your inquiry "
-            f"and our team will be in touch with you shortly to discuss your project."
-            f"{calendly_text_plain}\n\n"
-            f"In the meantime, feel free to reply to this email if you have any questions.\n\n"
-            f"— The TitanCode Team"
-        ),
-        html_content=(
-            f"<p>Hi <strong>{inquiry_in.full_name}</strong>,</p>"
-            f"<p>Thank you for reaching out to <strong>TitanCode Technologies</strong>!</p>"
-            f"<p>We've received your inquiry and our team will be in touch with you shortly "
-            f"to discuss your project.</p>"
-            f"{calendly_text_html}"
-            f"<p>In the meantime, feel free to reply to this email with any questions.</p>"
-            f"<br><p>— The TitanCode Team</p>"
-        ),
-    )
-
-    return inquiry
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -368,17 +287,31 @@ async def onboard_client(
 # ═══════════════════════════════════════════════════════════════════════
 @router.get("/inquiries", response_model=list[ClientInquiry])
 async def list_inquiries(
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    """
-    List all Hire Us form submissions.
-    Accessible only to CEO and Admin roles for CRM-style tracking.
-    """
-    result = await db.execute(
-        select(ClientInquiryModel).order_by(ClientInquiryModel.created_at.desc())
-    )
-    return result.scalars().all()
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/v1/leads")
+
+
+@router.put("/inquiries/{inquiry_id}/status", response_model=ClientInquiry)
+async def update_inquiry_status(
+    inquiry_id: int,
+    body: InquiryStatusUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(allow_admin),
+) -> Any:
+    raise HTTPException(status_code=410, detail="Deprecated. Use PATCH /api/v1/leads/{lead_id}")
+
+
+@router.get("/dashboard/funnel")
+async def founder_funnel_dashboard(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(allow_admin),
+) -> Any:
+    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/v1/dashboard/leads")
 
 
 # ═══════════════════════════════════════════════════════════════════════

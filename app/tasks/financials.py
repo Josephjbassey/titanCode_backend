@@ -104,6 +104,7 @@ async def _process_payout_calculation_async(
                     select(Project)
                     .options(selectinload(Project.members))
                     .where(Project.id == project_id)
+                    .with_for_update()
                 )
                 result = await session.execute(stmt)
                 project = result.scalars().first()
