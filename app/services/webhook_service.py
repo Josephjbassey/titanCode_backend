@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,7 @@ class WebhookService:
         provider: str,
         event_id: str,
         project_id: int,
+        amount: Decimal,
         payload_hash: str,
     ) -> None:
         try:
@@ -53,6 +55,10 @@ class WebhookService:
                 if not project:
                     raise WebhookProcessingError(f"Project {project_id} not found")
 
+                # Synchronize Project Budget with actual payment amount
+                project.budget = amount
+                
+                # Update status to COMPLETED if not already
                 if project.status != ProjectStatus.COMPLETED.value:
                     previous = project.status
                     project.status = ProjectStatus.COMPLETED.value
@@ -63,9 +69,18 @@ class WebhookService:
                             action="project_status_transition",
                             target_type="project",
                             target_id=project_id,
-                            details={"from": previous, "to": ProjectStatus.COMPLETED.value, "source": provider},
+                            details={"from": previous, "to": ProjectStatus.COMPLETED.value, "source": provider, "budget_sync": str(amount)},
                         )
                     )
+            
+            # TRIGGER FINANCIAL ENGINE
+            # Note: We do this OUTSIDE the database transaction block to avoid long-lived locks 
+            # if the task execution is slow, although the task itself handles its own transactions.
+            from app.tasks.financials import process_payout_calculation_async
+            # We send it to celery if available, or call it directly. 
+            # In this architecture, it seems to be a Celery task.
+            process_payout_calculation_async.delay(project_id=project_id)
+            
         except IntegrityError:
             # Duplicate webhook delivery under concurrency; treat as idempotent success.
             await db.rollback()
