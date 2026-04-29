@@ -7,7 +7,7 @@ from sqlalchemy.future import select
 
 from app.api.v1.endpoints.auth import RoleChecker
 from app.db.database import get_db
-from app.db.models import ClientInquiry, Project, Transaction, Withdrawal
+from app.db.models import ClientInquiry, Project, Withdrawal, ClientInvoice
 
 router = APIRouter()
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -19,13 +19,17 @@ async def overview(db: AsyncSession = Depends(get_db), _=Depends(allow_admin)) -
     active_projects = (await db.execute(select(func.count(Project.id)).where(Project.status.in_(["active", "in_progress"])))).scalar_one()
     completed_projects = (await db.execute(select(func.count(Project.id)).where(Project.status == "completed"))).scalar_one()
     pending_withdrawals = (await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "pending"))).scalar_one()
-    total_revenue = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(Transaction.transaction_type == "credit"))).scalar_one()
+    total_revenue = (await db.execute(select(func.coalesce(func.sum(ClientInvoice.total_amount), 0)).where(ClientInvoice.status == "paid"))).scalar_one()
+    pending_invoices = (await db.execute(select(func.count(ClientInvoice.id)).where(ClientInvoice.status.in_(["draft", "sent", "payment_pending"])))).scalar_one()
+    paid_invoices = (await db.execute(select(func.count(ClientInvoice.id)).where(ClientInvoice.status == "paid"))).scalar_one()
     return {
         "total_leads": total_leads,
         "active_projects": active_projects,
         "completed_projects": completed_projects,
         "pending_withdrawals": pending_withdrawals,
         "total_revenue": str(total_revenue),
+        "pending_invoices": pending_invoices,
+        "paid_invoices": paid_invoices,
     }
 
 
@@ -43,9 +47,9 @@ async def projects(db: AsyncSession = Depends(get_db), _=Depends(allow_admin)) -
 
 @router.get("/revenue")
 async def revenue(db: AsyncSession = Depends(get_db), _=Depends(allow_admin)) -> Any:
-    total_credits = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(Transaction.transaction_type == "credit"))).scalar_one()
-    total_debits = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(Transaction.transaction_type == "debit"))).scalar_one()
-    return {"total_credits": str(total_credits), "total_debits": str(total_debits)}
+    paid_total = (await db.execute(select(func.coalesce(func.sum(ClientInvoice.total_amount), 0)).where(ClientInvoice.status == "paid"))).scalar_one()
+    pending_total = (await db.execute(select(func.coalesce(func.sum(ClientInvoice.total_amount), 0)).where(ClientInvoice.status == "payment_pending"))).scalar_one()
+    return {"paid_revenue": str(paid_total), "pending_revenue": str(pending_total)}
 
 
 @router.get("/payouts")

@@ -529,6 +529,28 @@ class PayoutInvoice(Base):
     project = relationship("Project", backref="payout_invoice")
 
 
+class ClientInvoice(Base):
+    __tablename__ = "client_invoices"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'sent', 'payment_pending', 'paid', 'failed', 'cancelled')", name="ck_client_invoices_status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    invoice_id = Column(String(64), unique=True, nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    client_email = Column(String(255), nullable=False)
+    total_amount = Column(Numeric(12, 2), nullable=False)
+    currency = Column(String(10), nullable=False, default="USD")
+    provider = Column(String(50), nullable=True)
+    payment_url = Column(String(1000), nullable=True)
+    provider_reference = Column(String(255), nullable=True)
+    status = Column(String(32), nullable=False, default="draft")
+    notes = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # CLIENT INQUIRY MODEL (Hire Us Form)
 # ═══════════════════════════════════════════════════════════════════════
