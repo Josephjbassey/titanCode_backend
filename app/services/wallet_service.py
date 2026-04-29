@@ -43,46 +43,52 @@ class WalletService:
             raise WalletServiceError("Transaction type must be 'credit' or 'debit'")
 
         try:
-            async with db.begin():
-                wallet_row = await db.execute(
-                    select(Wallet).where(Wallet.id == wallet_id).with_for_update()
-                )
-                wallet = wallet_row.scalars().first()
-                if not wallet:
-                    raise WalletNotFoundError("Wallet not found")
+            wallet_row = await db.execute(
+                select(Wallet).where(Wallet.id == wallet_id).with_for_update()
+            )
+            wallet = wallet_row.scalars().first()
+            if not wallet:
+                raise WalletNotFoundError("Wallet not found")
 
-                if reference_id:
-                    existing_row = await db.execute(
-                        select(Transaction).where(
-                            Transaction.wallet_id == wallet_id,
-                            Transaction.reference_id == reference_id,
-                            Transaction.transaction_type == transaction_type,
-                            Transaction.amount == amount,
-                        )
+            if reference_id:
+                existing_row = await db.execute(
+                    select(Transaction).where(
+                        Transaction.wallet_id == wallet_id,
+                        Transaction.reference_id == reference_id,
                     )
-                    existing = existing_row.scalars().first()
-                    if existing:
-                        return existing, wallet, True
-
-                if transaction_type == "debit":
-                    if wallet.balance < amount:
-                        raise InsufficientFundsError(f"Insufficient funds. Current balance: {wallet.balance}")
-                    wallet.balance = wallet.balance - amount
-                else:
-                    wallet.balance = wallet.balance + amount
-
-                transaction = Transaction(
-                    wallet_id=wallet_id,
-                    amount=amount,
-                    transaction_type=transaction_type,
-                    description=description,
-                    reference_id=reference_id,
                 )
-                db.add(transaction)
+                existing = existing_row.scalars().first()
+                if existing:
+                    if existing.transaction_type != transaction_type or existing.amount != amount:
+                        raise DuplicateTransactionError(
+                            "Reference ID already used with different transaction details"
+                        )
+                    await db.commit()
+                    await db.refresh(wallet)
+                    return existing, wallet, True
 
+            if transaction_type == "debit":
+                if wallet.balance < amount:
+                    raise InsufficientFundsError(f"Insufficient funds. Current balance: {wallet.balance}")
+                wallet.balance = wallet.balance - amount
+            else:
+                wallet.balance = wallet.balance + amount
+
+            transaction = Transaction(
+                wallet_id=wallet_id,
+                amount=amount,
+                transaction_type=transaction_type,
+                description=description,
+                reference_id=reference_id,
+            )
+            db.add(transaction)
+            await db.commit()
             await db.refresh(wallet)
             await db.refresh(transaction)
             return transaction, wallet, False
         except IntegrityError as exc:
             await db.rollback()
             raise DuplicateTransactionError("Duplicate transaction detected") from exc
+        except WalletServiceError:
+            await db.rollback()
+            raise
