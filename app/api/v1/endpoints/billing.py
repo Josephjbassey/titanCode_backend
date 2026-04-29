@@ -1,5 +1,6 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -39,6 +40,7 @@ async def _initialize_paystack_payment(*, amount: Decimal, email: str, metadata:
     payload = {
         "email": email,
         "amount": _to_cents(amount),
+        "metadata": metadata,
     }
     headers = {"Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}"}
 
@@ -98,7 +100,7 @@ async def generate_invoice(
     normalized_items = [{"description": item.description, "amount": Decimal(str(item.amount))} for item in body.items]
     total_amount = sum((item["amount"] for item in normalized_items), Decimal("0.00"))
     total_amount = total_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    invoice_id = f"{body.client_name.lower().replace(' ', '-')}-{int(total_amount * 100)}"
+    invoice_id = f"inv_{uuid4().hex}"
 
     metadata = {
         "invoice_id": invoice_id,
