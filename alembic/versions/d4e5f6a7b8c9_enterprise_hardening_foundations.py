@@ -43,7 +43,7 @@ def upgrade() -> None:
         sa.Column('action', sa.String(length=100), nullable=False),
         sa.Column('target_type', sa.String(length=50), nullable=False),
         sa.Column('target_id', sa.Integer(), nullable=False),
-        sa.Column('metadata', sa.JSON(), nullable=True),
+        sa.Column('details', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint('id')
     )

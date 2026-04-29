@@ -30,13 +30,13 @@ class WebhookService:
         project_id: int,
         payload_hash: str,
     ) -> None:
-        existing = await db.execute(
-            select(WebhookEvent).where(WebhookEvent.provider == provider, WebhookEvent.event_id == event_id)
-        )
-        if existing.scalars().first():
-            return
-
         async with db.begin():
+            existing = await db.execute(
+                select(WebhookEvent).where(WebhookEvent.provider == provider, WebhookEvent.event_id == event_id)
+            )
+            if existing.scalars().first():
+                return
+
             event = WebhookEvent(
                 provider=provider,
                 event_id=event_id,
@@ -61,6 +61,6 @@ class WebhookService:
                         action="project_status_transition",
                         target_type="project",
                         target_id=project_id,
-                        metadata={"from": previous, "to": ProjectStatus.COMPLETED.value, "source": provider},
+                        details={"from": previous, "to": ProjectStatus.COMPLETED.value, "source": provider},
                     )
                 )

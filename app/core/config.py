@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Admin Seeding
     FIRST_SUPERUSER: EmailStr = "admin@titancode.com"
-    FIRST_SUPERUSER_PASSWORD: str
+    FIRST_SUPERUSER_PASSWORD: Optional[str] = None
     AUTO_SEED_DEFAULT_ADMIN: bool = True
 
     API_V1_STR: str = "/api/v1"

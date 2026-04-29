@@ -587,5 +587,5 @@ class AuditLog(Base):
     action = Column(String(100), nullable=False)
     target_type = Column(String(50), nullable=False)
     target_id = Column(Integer, nullable=False)
-    metadata = Column(JSON, nullable=True)
+    details = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
