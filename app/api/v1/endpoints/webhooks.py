@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.database import get_db
+from sqlalchemy.future import select
+from app.db.models import ClientInvoice
 from app.core.rate_limiter import limiter
 from app.schemas.webhooks import PaystackWebhookEnvelope, FlutterwaveWebhookEnvelope
 from app.services.webhook_service import WebhookService, WebhookValidationError, WebhookProcessingError
@@ -29,6 +31,8 @@ async def paystack_webhook(
 
     payload = await request.body()
     secret = settings.PAYSTACK_SECRET_KEY or ""
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret is not configured")
     expected_hmac = hmac.new(secret.encode("utf-8"), payload, hashlib.sha512).hexdigest()
     if not hmac.compare_digest(expected_hmac, x_paystack_signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
@@ -58,6 +62,17 @@ async def paystack_webhook(
                     project_id=int(project_id_str),
                     payload_hash=payload_hash,
                 )
+                invoice_id = meta.get("invoice_id")
+                if invoice_id:
+                    invoice = (
+                        await db_session.execute(
+                            select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id)
+                        )
+                    ).scalars().first()
+                    if invoice:
+                        invoice.status = "paid"
+                        invoice.provider_reference = x_paystack_event_id
+                        await db_session.commit()
             except WebhookProcessingError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
 
@@ -105,6 +120,17 @@ async def flutterwave_webhook(
                     project_id=int(project_id_str),
                     payload_hash=hashlib.sha256(payload).hexdigest(),
                 )
+                invoice_id = meta.get("invoice_id")
+                if invoice_id:
+                    invoice = (
+                        await db_session.execute(
+                            select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id)
+                        )
+                    ).scalars().first()
+                    if invoice:
+                        invoice.status = "paid"
+                        invoice.provider_reference = x_flutterwave_event_id
+                        await db_session.commit()
             except WebhookProcessingError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
 

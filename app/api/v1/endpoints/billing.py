@@ -1,10 +1,14 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, EmailStr
-from app.db.models import User
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from app.db.database import get_db
+from app.db.models import User, ClientInvoice, Project
 from app.api.v1.endpoints.auth import RoleChecker
 from app.core.config import settings
 from app.core.pdf_generator import generate_invoice_pdf
@@ -21,11 +25,16 @@ class InvoiceItem(BaseModel):
     amount: float
 
 class GenerateInvoiceRequest(BaseModel):
+    project_id: int
     email: EmailStr
     client_name: str
     company_name: str = "N/A"
     items: list[InvoiceItem]
     payment_method: str = "paystack" # "paystack" or "flutterwave"
+
+
+class InvoiceStatusUpdateRequest(BaseModel):
+    status: str
 
 
 def _to_cents(amount: Decimal) -> int:
@@ -39,6 +48,7 @@ async def _initialize_paystack_payment(*, amount: Decimal, email: str, metadata:
     payload = {
         "email": email,
         "amount": _to_cents(amount),
+        "metadata": metadata,
     }
     headers = {"Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}"}
 
@@ -86,6 +96,7 @@ async def _initialize_flutterwave_payment(*, amount: Decimal, email: str, metada
 @limiter.limit("5/minute")
 async def generate_invoice(
     body: GenerateInvoiceRequest,
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(allow_admin),
 ) -> Any:
     """
@@ -98,13 +109,17 @@ async def generate_invoice(
     normalized_items = [{"description": item.description, "amount": Decimal(str(item.amount))} for item in body.items]
     total_amount = sum((item["amount"] for item in normalized_items), Decimal("0.00"))
     total_amount = total_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    invoice_id = f"{body.client_name.lower().replace(' ', '-')}-{int(total_amount * 100)}"
+    invoice_id = f"inv_{uuid4().hex}"
 
     metadata = {
         "invoice_id": invoice_id,
+        "project_id": str(body.project_id),
         "client_name": body.client_name,
         "company_name": body.company_name,
     }
+    project = (await db.execute(select(Project).where(Project.id == body.project_id))).scalars().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
     if body.payment_method == "paystack":
         payment_url = await _initialize_paystack_payment(
@@ -150,6 +165,18 @@ async def generate_invoice(
             f"<br><p>— TitanCode Finance Team</p>"
         ),
     )
+    invoice = ClientInvoice(
+        invoice_id=invoice_id,
+        project_id=body.project_id,
+        client_email=body.email,
+        total_amount=total_amount,
+        provider=body.payment_method,
+        payment_url=payment_url,
+        status="payment_pending",
+        created_by=current_user.id,
+    )
+    db.add(invoice)
+    await db.commit()
 
     return {
         "message": f"Invoice generated and sent to {body.email}",
@@ -158,3 +185,55 @@ async def generate_invoice(
         "payment_url": payment_url,
         "invoice_id": invoice_id,
     }
+
+
+@router.get("/invoices")
+async def list_invoices(
+    status_filter: str | None = Query(None, alias="status"),
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(allow_admin),
+) -> Any:
+    q = select(ClientInvoice).order_by(ClientInvoice.created_at.desc())
+    if status_filter:
+        q = q.where(ClientInvoice.status == status_filter)
+    return (await db.execute(q)).scalars().all()
+
+
+@router.get("/invoices/{invoice_id}")
+async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
+    invoice = (await db.execute(select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id))).scalars().first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return invoice
+
+
+@router.post("/invoices/{invoice_id}/initialize-payment")
+async def initialize_payment(invoice_id: str, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
+    invoice = (await db.execute(select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id))).scalars().first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status in {"paid", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Cannot initialize payment for {invoice.status} invoice")
+    metadata = {"invoice_id": invoice.invoice_id, "project_id": str(invoice.project_id)}
+    if invoice.provider == "flutterwave":
+        payment_url = await _initialize_flutterwave_payment(amount=invoice.total_amount, email=invoice.client_email, metadata=metadata)
+    else:
+        payment_url = await _initialize_paystack_payment(amount=invoice.total_amount, email=invoice.client_email, metadata=metadata)
+    invoice.payment_url = payment_url
+    invoice.status = "payment_pending"
+    await db.commit()
+    return {"invoice_id": invoice.invoice_id, "payment_url": payment_url, "status": invoice.status}
+
+
+@router.patch("/invoices/{invoice_id}/status")
+async def mark_invoice_status(invoice_id: str, body: InvoiceStatusUpdateRequest, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
+    allowed = {"paid", "cancelled", "failed", "sent", "draft", "payment_pending"}
+    if body.status not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported status {body.status}")
+    invoice = (await db.execute(select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id))).scalars().first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    invoice.status = body.status
+    await db.commit()
+    await db.refresh(invoice)
+    return invoice
