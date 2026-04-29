@@ -196,3 +196,9 @@ async def readiness_check():
         await redis_client.close()
 
     return {"status": "healthy", "service": settings.PROJECT_NAME}
+
+
+@app.get("/", tags=["health"])
+async def health_check_root():
+    """Backward-compatible root health endpoint."""
+    return await readiness_check()

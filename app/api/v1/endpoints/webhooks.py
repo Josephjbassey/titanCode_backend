@@ -3,6 +3,7 @@ import hashlib
 import logging
 import json
 from fastapi import APIRouter, Request, Header, HTTPException, Depends
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.database import get_db
@@ -33,11 +34,17 @@ async def paystack_webhook(
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
-        WebhookService.validate_timestamp(int(x_paystack_timestamp))
+        ts = int(x_paystack_timestamp)
+        WebhookService.validate_timestamp(ts)
+    except (ValueError, OverflowError):
+        raise HTTPException(status_code=400, detail="Invalid timestamp header")
     except WebhookValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    event = PaystackWebhookEnvelope.model_validate_json(payload)
+    try:
+        event = PaystackWebhookEnvelope.model_validate_json(payload)
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
     if event.event == "charge.success":
         meta = event.data.get("metadata", {})
         project_id_str = meta.get("project_id")
@@ -73,12 +80,18 @@ async def flutterwave_webhook(
         raise HTTPException(status_code=400, detail="Missing required webhook headers")
 
     try:
-        WebhookService.validate_timestamp(int(x_flutterwave_timestamp))
+        ts = int(x_flutterwave_timestamp)
+        WebhookService.validate_timestamp(ts)
+    except (ValueError, OverflowError):
+        raise HTTPException(status_code=400, detail="Invalid timestamp header")
     except WebhookValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
     payload = await request.body()
-    event = FlutterwaveWebhookEnvelope.model_validate_json(payload)
+    try:
+        event = FlutterwaveWebhookEnvelope.model_validate_json(payload)
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
     if event.event == "charge.completed" and event.data.get("status") == "successful":
         meta = event.data.get("meta", {})
