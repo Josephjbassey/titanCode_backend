@@ -36,7 +36,7 @@ async def paystack_webhook(
         hashlib.sha512
     ).hexdigest()
 
-    if expected_hmac != x_paystack_signature:
+    if not hmac.compare_digest(expected_hmac, x_paystack_signature):
         logger.error("Paystack Webhook Security: Signature verification failed")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
@@ -67,7 +67,7 @@ async def flutterwave_webhook(
     # Verify the secret hash set in the Flutterwave developer dashboard
     expected_hash = getattr(settings, "FLUTTERWAVE_WEBHOOK_SECRET", None) or settings.FLUTTERWAVE_SECRET_KEY
     
-    if not verif_hash or verif_hash != expected_hash:
+    if not verif_hash or not hmac.compare_digest(verif_hash, expected_hash):
         logger.error("Flutterwave Webhook Security: Hash verification failed")
         raise HTTPException(status_code=401, detail="Invalid signature")
     
