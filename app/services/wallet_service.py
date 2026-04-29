@@ -63,6 +63,7 @@ class WalletService:
                         raise DuplicateTransactionError(
                             "Reference ID already used with different transaction details"
                         )
+                    await db.commit()
                     await db.refresh(wallet)
                     return existing, wallet, True
 
