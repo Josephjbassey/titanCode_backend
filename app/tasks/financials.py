@@ -154,24 +154,21 @@ async def _process_payout_calculation_async(
                     )
                     session.add(transaction)
 
-                # 5. COMPANY SHARE: The remaining 30% goes to the client/company wallet.
+                # 5. COMPANY SHARE: The remaining 30% goes to the Company Treasury.
                 company_share = project.budget - total_member_payout
                 if company_share > 0:
-                    stmt = select(Wallet).where(Wallet.user_id == project.client_id).with_for_update()
+                    from app.db.models import CompanyWallet
+                    stmt = select(CompanyWallet).with_for_update()
                     res = await session.execute(stmt)
                     company_wallet = res.scalars().first()
                     
                     if not company_wallet:
-                        company_wallet = Wallet(user_id=project.client_id, balance=Decimal("0.00"), currency="USD")
+                        company_wallet = CompanyWallet(balance=Decimal("0.00"), currency="USD")
                         session.add(company_wallet)
                         await session.flush()
                     
                     company_wallet.balance += company_share
-                    session.add(Transaction(
-                        wallet_id=company_wallet.id, amount=company_share,
-                        transaction_type="credit", description=f"Company profit share (30%)",
-                        reference_id=f"{payout_key}:company:{project.client_id}",
-                    ))
+                    logger.info(f"Financial Engine: Credited ${company_share} to Company Treasury for Project {project_id}")
 
                 # 6. INVOICE GENERATION: Create a final document summarizes the whole payout.
                 session.add(PayoutInvoice(
