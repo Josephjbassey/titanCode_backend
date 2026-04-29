@@ -11,6 +11,7 @@ from app.core.pdf_generator import generate_invoice_pdf
 from app.core.tasks import enqueue_email_task
 from fastapi.concurrency import run_in_threadpool
 
+from app.core.rate_limiter import limiter
 router = APIRouter()
 
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -38,7 +39,6 @@ async def _initialize_paystack_payment(*, amount: Decimal, email: str, metadata:
     payload = {
         "email": email,
         "amount": _to_cents(amount),
-        "metadata": metadata,
     }
     headers = {"Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}"}
 
@@ -83,6 +83,7 @@ async def _initialize_flutterwave_payment(*, amount: Decimal, email: str, metada
 
 
 @router.post("/generate-invoice", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
 async def generate_invoice(
     body: GenerateInvoiceRequest,
     current_user: User = Depends(allow_admin),

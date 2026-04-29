@@ -151,7 +151,7 @@ async def list_tasks(
         filters.append(Task.assigned_user == assigned_user)
 
     count_stmt = select(func.count(Task.id)).select_from(Task)
-    stmt = select(Task)
+    stmt = select(Task).options(selectinload(Task.project), selectinload(Task.assignee))
     if current_user.role not in ["CEO", "Admin"]:
         stmt = stmt.join(Project, Project.id == Task.project_id)
         count_stmt = count_stmt.join(Project, Project.id == Task.project_id)

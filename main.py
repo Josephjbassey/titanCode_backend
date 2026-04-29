@@ -53,7 +53,7 @@ async def seed_default_admin():
 
     Credentials (from MVP Architecture doc, Section 9):
         Email:    admin@titancode.com
-        Password: TitanCodeAdmin123!
+        Password: Provided via FIRST_SUPERUSER_PASSWORD environment variable
         Role:     CEO
         Status:   approved (active from the start)
 

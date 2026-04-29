@@ -255,6 +255,9 @@ class Task(Base):
         created_at:    Timestamp.
     """
     __tablename__ = "tasks"
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'in_progress', 'completed')", name="ck_tasks_status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
