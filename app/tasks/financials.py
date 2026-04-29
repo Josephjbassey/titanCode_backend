@@ -88,6 +88,7 @@ async def _process_payout_calculation_async(
             # ATOMIC TRANSACTION: 'session.begin()' means "All these changes must happen together, or none at all."
             # If we update User A's wallet but the server crashes before User B, this rolls back User A too.
             async with session.begin():
+                logger.info(f"Financial Engine: Transaction started for Project {project_id}")
                 
                 # 1. IDEMPOTENCY CHECK: "Don't do the same work twice."
                 # We check if an invoice already exists. If it does, we stop immediately so we don't pay twice!
@@ -181,6 +182,7 @@ async def _process_payout_calculation_async(
                 ))
             
             # If we reached here without errors, 'session.begin()' will commit (save) all changes to the DB.
+                logger.info(f"Financial Engine: Transaction committed for Project {project_id}")
             logger.info(f"Financial Engine: Success. Payout for Project {project_id} finalized.")
             return True
             
