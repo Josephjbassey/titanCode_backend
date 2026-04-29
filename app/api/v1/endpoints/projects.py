@@ -19,7 +19,6 @@ from app.schemas.project import (
     ProjectCreate,
     ProjectListResponse,
     ProjectUpdate,
-    ProjectRequest,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.services.project_service import ProjectService
@@ -139,9 +138,10 @@ async def delete_project(
 
 @router.post("/client/request-project", response_model=ProjectSchema, status_code=status.HTTP_201_CREATED)
 async def request_project(
-    project_in: ProjectRequest,
-    db: AsyncSession = Depends(get_db),
 ) -> Any:
-    project = await ProjectService.request_project(db, project_in)
-    project.member_ids = []
-    return project
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Deprecated endpoint. Use POST /api/v1/leads as the canonical lead intake flow."
+        ),
+    )

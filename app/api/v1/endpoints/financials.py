@@ -10,9 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any, List
 from decimal import Decimal
+from contextlib import nullcontext
 
 from app.db.database import get_db
-from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, utcnow
+from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, Project, utcnow
 from app.schemas.financials import (
     CompanyWallet as WalletSchema, 
     Withdrawal as WithdrawalSchema, 
@@ -39,6 +40,39 @@ WITHDRAWAL_ALLOWED_TRANSITIONS = {
     "rejected": set(),
     "paid": set(),
 }
+
+
+@router.get("/dashboard/operations")
+async def operations_dashboard(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(allow_admins),
+) -> Any:
+    pending_withdrawals = (
+        await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "pending"))
+    ).scalar_one()
+    approved_withdrawals = (
+        await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "approved"))
+    ).scalar_one()
+    paid_withdrawals = (
+        await db.execute(select(func.count(Withdrawal.id)).where(Withdrawal.status == "paid"))
+    ).scalar_one()
+    completed_projects = (
+        await db.execute(select(func.count(Project.id)).where(Project.status == "completed"))
+    ).scalar_one()
+    pending_projects = (
+        await db.execute(select(func.count(Project.id)).where(Project.status == "pending"))
+    ).scalar_one()
+    active_projects = (
+        await db.execute(select(func.count(Project.id)).where(Project.status == "active"))
+    ).scalar_one()
+    return {
+        "projects": {"pending": pending_projects, "active": active_projects, "completed": completed_projects},
+        "withdrawals": {
+            "pending": pending_withdrawals,
+            "approved": approved_withdrawals,
+            "paid": paid_withdrawals,
+        },
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -87,28 +121,41 @@ async def request_withdrawal(
     Returns:
         WithdrawalSchema: The created request.
     """
-    # 1. Check user's personal wallet balance
-    result = await db.execute(
-        select(Wallet).where(Wallet.user_id == current_user.id).with_for_update()
-    )
-    user_wallet = result.scalars().first()
-    
-    if not user_wallet or user_wallet.balance < withdrawal_in.amount:
-        raise HTTPException(status_code=400, detail="Insufficient funds in your personal wallet")
+    bank_info = withdrawal_in.bank_info or current_user.bank_account_number
+    if not bank_info:
+        raise HTTPException(status_code=400, detail="Bank info is required before requesting withdrawal")
+    if withdrawal_in.amount <= 0:
+        raise HTTPException(status_code=400, detail="Withdrawal amount must be greater than zero")
 
-    # 2. Create the withdrawal record
-    withdrawal = Withdrawal(
-        user_id=current_user.id,
-        amount=withdrawal_in.amount,
-        bank_info=withdrawal_in.bank_info or current_user.bank_account_number,
-        status="pending"
-    )
-    db.add(withdrawal)
-    
-    # 3. Deduct from user wallet to prevent double-spending while pending
-    user_wallet.balance -= withdrawal_in.amount
-    
-    await db.commit()
+    tx_ctx = nullcontext() if db.in_transaction() else db.begin()
+    async with tx_ctx:
+        result = await db.execute(
+            select(Wallet).where(Wallet.user_id == current_user.id).with_for_update()
+        )
+        user_wallet = result.scalars().first()
+        if not user_wallet or user_wallet.balance < withdrawal_in.amount:
+            raise HTTPException(status_code=400, detail="Insufficient funds in your personal wallet")
+
+        withdrawal = Withdrawal(
+            user_id=current_user.id,
+            amount=withdrawal_in.amount,
+            bank_info=bank_info,
+            status="pending"
+        )
+        db.add(withdrawal)
+        user_wallet.balance -= withdrawal_in.amount
+        db.add(
+            Transaction(
+                wallet_id=user_wallet.id,
+                amount=withdrawal_in.amount,
+                transaction_type="debit",
+                description=f"Withdrawal request #{current_user.id} (pending)",
+                reference_id=f"withdrawal:pending:user:{current_user.id}:{utcnow().isoformat()}",
+            )
+        )
+    if db.in_transaction():
+        await db.commit()
+
     await db.refresh(withdrawal)
     return withdrawal
 
@@ -220,6 +267,15 @@ async def process_withdrawal(
         user_wallet = result.scalars().first()
         if user_wallet:
             user_wallet.balance += withdrawal.amount
+            db.add(
+                Transaction(
+                    wallet_id=user_wallet.id,
+                    amount=withdrawal.amount,
+                    transaction_type="credit",
+                    description=f"Withdrawal #{withdrawal.id} rejected - funds restored",
+                    reference_id=f"withdrawal:refund:{withdrawal.id}",
+                )
+            )
 
     # Update status and reviewer
     withdrawal.status = target_status
