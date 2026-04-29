@@ -16,6 +16,17 @@ from app.db.models import ClientInquiry, Project, User
 router = APIRouter()
 allow_admin = RoleChecker(["CEO", "Admin"])
 
+ALLOWED_LEAD_STATUSES = {"new", "contacted", "qualified", "proposal_sent", "won", "lost", "converted"}
+LEAD_ALLOWED_TRANSITIONS = {
+    "new": {"contacted", "lost"},
+    "contacted": {"qualified", "lost"},
+    "qualified": {"proposal_sent", "lost"},
+    "proposal_sent": {"won", "lost"},
+    "won": {"converted"},
+    "lost": set(),
+    "converted": set(),
+}
+
 
 class LeadCreate(BaseModel):
     name: str
@@ -37,13 +48,19 @@ class LeadUpdate(BaseModel):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_lead(payload: LeadCreate, db: AsyncSession = Depends(get_db)) -> Any:
+    qualification_suffix = (
+        f"\n\n[qualification]\n"
+        f"budget_range={payload.budget_range or 'N/A'}\n"
+        f"timeline={payload.timeline or 'N/A'}\n"
+        f"source={payload.source or 'N/A'}"
+    )
     inquiry = ClientInquiry(
         full_name=payload.name,
         email=payload.email,
         phone=payload.phone,
         company=payload.company,
         service_interest=payload.project_type,
-        message=payload.description,
+        message=(payload.description or "") + qualification_suffix,
         status="new",
     )
     db.add(inquiry)
@@ -95,6 +112,11 @@ async def update_lead(lead_id: int, body: LeadUpdate, db: AsyncSession = Depends
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     if body.status is not None:
+        if body.status not in ALLOWED_LEAD_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Invalid lead status: {body.status}")
+        current_status = lead.status or "new"
+        if body.status != current_status and body.status not in LEAD_ALLOWED_TRANSITIONS.get(current_status, set()):
+            raise HTTPException(status_code=409, detail=f"Illegal lead transition: {current_status} -> {body.status}")
         lead.status = body.status
     if body.lost_reason:
         lead.message = (lead.message or "") + f"\nLost reason: {body.lost_reason}"
