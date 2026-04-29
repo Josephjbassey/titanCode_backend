@@ -90,13 +90,14 @@ async def paystack_webhook(
 async def flutterwave_webhook(
     request: Request,
     verif_hash: str = Header(None),
+    x_flutterwave_signature: str = Header(None),
     x_flutterwave_event_id: str = Header(None),
     x_flutterwave_timestamp: str = Header(None),
     db_session: AsyncSession = Depends(get_db)
 ):
-    expected_hash = getattr(settings, "FLUTTERWAVE_WEBHOOK_SECRET", None) or settings.FLUTTERWAVE_SECRET_KEY
-    if not verif_hash or not expected_hash or not hmac.compare_digest(verif_hash, expected_hash):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    expected_secret = getattr(settings, "FLUTTERWAVE_WEBHOOK_SECRET", None) or settings.FLUTTERWAVE_SECRET_KEY
+    if not expected_secret:
+        raise HTTPException(status_code=500, detail="Webhook secret is not configured")
     if not x_flutterwave_event_id or not x_flutterwave_timestamp:
         raise HTTPException(status_code=400, detail="Missing required webhook headers")
 
@@ -109,6 +110,10 @@ async def flutterwave_webhook(
         raise HTTPException(status_code=400, detail=str(exc))
 
     payload = await request.body()
+    expected_hmac = hmac.new(expected_secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    signature = x_flutterwave_signature or verif_hash
+    if not signature or not hmac.compare_digest(signature, expected_hmac):
+        raise HTTPException(status_code=401, detail="Invalid signature")
     try:
         event = FlutterwaveWebhookEnvelope.model_validate_json(payload)
     except ValidationError:

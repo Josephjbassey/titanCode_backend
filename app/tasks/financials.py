@@ -7,19 +7,22 @@ specifically project payout calculations and wallet updates.
 
 import logging
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.core.celery_app import celery_app
+from app.core.tasks import record_dead_letter
 from app.db.database import AsyncSessionLocal
 from app.db.models import Project, User, Wallet, Transaction, PayoutInvoice
 
 # ── Structured JSON Logging ───────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
-@celery_app.task(name="process_payout_calculation")
+@celery_app.task(bind=True, name="process_payout_calculation", max_retries=5)
 def process_payout_calculation(
+    self,
     project_id: int,
     idempotency_key: str | None = None,
     externally_triggered: bool = False,
@@ -32,26 +35,24 @@ def process_payout_calculation(
     database operations use 'asyncio', we need this bridge to run our async 
     code inside the synchronous Celery worker.
     """
+    payload = {"project_id": project_id, "idempotency_key": idempotency_key, "externally_triggered": externally_triggered}
     try:
-        # Step 1: Get the current 'brain' (event loop) of the process.
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # Step 2: If no brain is active, create a new one.
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-    if loop.is_running():
-        # Step 3: If the brain is already thinking (running), safely schedule our task.
-        return asyncio.run_coroutine_threadsafe(
-            _process_payout_calculation_async(
-                project_id,
-                idempotency_key=idempotency_key,
-                externally_triggered=externally_triggered,
-            ),
-            loop,
-        ).result()
-    else:
-        # Step 4: Otherwise, run our async task until it finishes.
+        if loop.is_running():
+            return asyncio.run_coroutine_threadsafe(
+                _process_payout_calculation_async(
+                    project_id,
+                    idempotency_key=idempotency_key,
+                    externally_triggered=externally_triggered,
+                ),
+                loop,
+            ).result()
+
         return loop.run_until_complete(
             _process_payout_calculation_async(
                 project_id,
@@ -59,6 +60,22 @@ def process_payout_calculation(
                 externally_triggered=externally_triggered,
             )
         )
+    except Exception as exc:
+        retries = int(self.request.retries)
+        if retries >= int(self.max_retries):
+            record_dead_letter.delay(
+                failed_task=self.name,
+                payload=payload,
+                error_message=str(exc),
+                retries=retries,
+                failed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            logger.exception("Financial task exhausted retries", extra={"project_id": project_id})
+            raise
+
+        countdown = min(2 ** max(retries, 0), 300)
+        logger.warning("Retrying financial task", extra={"project_id": project_id, "retry": retries + 1, "countdown": countdown})
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 async def _process_payout_calculation_async(

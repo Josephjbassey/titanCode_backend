@@ -99,6 +99,10 @@ async def lifespan(app: FastAPI):
     # Step 1: Initialize structured JSON logging (must be first)
     setup_logging()
 
+    # Step 2: enforce secure bootstrap posture for non-development environments.
+    if not settings.is_dev_environment and settings.AUTO_SEED_DEFAULT_ADMIN:
+        logger.warning("AUTO_SEED_DEFAULT_ADMIN is enabled in %s; disable after initial bootstrap.", settings.ENVIRONMENT)
+
     # Step 2: Seed the default admin account only when explicitly enabled
     if settings.AUTO_SEED_DEFAULT_ADMIN:
         await seed_default_admin()
