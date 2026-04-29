@@ -19,7 +19,7 @@ Relationships:
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Numeric, DateTime, Table, Boolean, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Numeric, DateTime, Table, Boolean, UniqueConstraint, CheckConstraint, JSON
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -89,6 +89,10 @@ class User(Base):
         created_at:     Registration timestamp.
     """
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('CEO', 'Admin', 'Manager', 'Assistant', 'Member', 'Applicant', 'Client')", name="ck_users_role"),
+        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="ck_users_status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)
@@ -162,6 +166,9 @@ class Application(Base):
         reviewed_at:   When the review happened.
     """
     __tablename__ = "applications"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="ck_applications_status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -207,6 +214,9 @@ class Project(Base):
         created_at:  Timestamp.
     """
     __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'active', 'completed', 'cancelled')", name="ck_projects_status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
@@ -551,3 +561,31 @@ class ClientInquiry(Base):
     message = Column(Text, nullable=True)
     status = Column(String(50), default="new", nullable=False)  # new | contacted | converted
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "event_id", name="uq_webhook_provider_event"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String(50), nullable=False)
+    event_id = Column(String(255), nullable=False)
+    payload_hash = Column(String(128), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    status = Column(String(50), nullable=False, default="processed")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor_type = Column(String(50), nullable=False)
+    actor_id = Column(Integer, nullable=True)
+    action = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=False)
+    target_id = Column(Integer, nullable=False)
+    metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
