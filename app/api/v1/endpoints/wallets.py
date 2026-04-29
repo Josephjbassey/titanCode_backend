@@ -17,7 +17,6 @@ API Routes (all prefixed with /api/v1/wallets):
     GET  /{wallet_id}/history — Get transaction history for a wallet (Admin+)
 """
 
-from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -36,6 +35,12 @@ from app.schemas.wallet import (
     TransactionResponse,
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
+from app.services.wallet_service import (
+    WalletService,
+    WalletServiceError,
+    WalletNotFoundError,
+    InsufficientFundsError,
+)
 
 # Create a new router instance — registered in main.py
 router = APIRouter()
@@ -192,38 +197,21 @@ async def create_transaction(
         HTTPException 400: If the transaction type is invalid or
                            insufficient funds for a debit.
     """
-    # Step 1: Find the wallet
-    result = await db.execute(select(Wallet).where(Wallet.id == txn_in.wallet_id))
-    wallet = result.scalars().first()
-    if not wallet:
-        raise HTTPException(status_code=404, detail="Wallet not found")
-
-    # Step 2: Validate transaction type
-    if txn_in.transaction_type not in ("credit", "debit"):
-        raise HTTPException(
-            status_code=400,
-            detail="Transaction type must be 'credit' or 'debit'",
+    try:
+        transaction, wallet, idempotent_replay = await WalletService.apply_transaction(
+            db,
+            wallet_id=txn_in.wallet_id,
+            amount=txn_in.amount,
+            transaction_type=txn_in.transaction_type,
+            description=txn_in.description,
+            reference_id=txn_in.reference_id,
         )
-
-    # Step 3: Apply the balance change
-    if txn_in.transaction_type == "credit":
-        wallet.balance = wallet.balance + txn_in.amount
-    else:
-        # Prevent overdrawing — can't debit more than the balance
-        if wallet.balance < txn_in.amount:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient funds. Current balance: {wallet.balance}",
-            )
-        wallet.balance = wallet.balance - txn_in.amount
-
-    # Step 4: Create the transaction record (audit trail)
-    transaction = Transaction(**txn_in.model_dump())
-    db.add(transaction)
-
-    # Step 5: Save both the wallet update and new transaction atomically
-    await db.commit()
-    await db.refresh(transaction)
+    except WalletNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InsufficientFundsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WalletServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Step 6: Send a real-time notification to the wallet owner
     emoji = "💰" if txn_in.transaction_type == "credit" else "💸"
@@ -234,9 +222,10 @@ async def create_transaction(
             "type": "wallet",
             "title": f"Wallet {txn_in.transaction_type.capitalize()} {emoji}",
             "message": (
-                f"${txn_in.amount:.2f} has been {action} your wallet. "
+                f"${transaction.amount:.2f} has been {action} your wallet. "
                 f"New balance: ${wallet.balance:.2f}. "
-                f"Reason: {txn_in.description or 'N/A'}"
+                f"Reason: {transaction.description or 'N/A'}"
+                + (" (idempotent replay ignored)" if idempotent_replay else "")
             ),
         },
     )
