@@ -57,3 +57,7 @@ class SendCustomEmailRequest(BaseModel):
     email: EmailStr
     subject: str
     message: str
+
+
+class InquiryStatusUpdateRequest(BaseModel):
+    status: str
