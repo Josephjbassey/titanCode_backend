@@ -29,6 +29,8 @@ async def paystack_webhook(
 
     payload = await request.body()
     secret = settings.PAYSTACK_SECRET_KEY or ""
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret is not configured")
     expected_hmac = hmac.new(secret.encode("utf-8"), payload, hashlib.sha512).hexdigest()
     if not hmac.compare_digest(expected_hmac, x_paystack_signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
