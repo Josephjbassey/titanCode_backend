@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Admin Seeding
     FIRST_SUPERUSER: EmailStr = "admin@titancode.com"
-    FIRST_SUPERUSER_PASSWORD: str = "TitanCodeAdmin123!"  # Default for dev, override in .env
+    FIRST_SUPERUSER_PASSWORD: str
     AUTO_SEED_DEFAULT_ADMIN: bool = True
 
     API_V1_STR: str = "/api/v1"
@@ -110,13 +110,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_secure_bootstrap_defaults(self):
         """Fail fast when insecure bootstrap defaults are used outside dev/test."""
-        insecure_default_password = self.FIRST_SUPERUSER_PASSWORD == "TitanCodeAdmin123!"
-
-        if not self.is_dev_environment and insecure_default_password:
-            raise ValueError(
-                "FIRST_SUPERUSER_PASSWORD must be overridden with a non-default secret "
-                "when ENVIRONMENT is not development/test."
-            )
+        if self.AUTO_SEED_DEFAULT_ADMIN and not self.FIRST_SUPERUSER_PASSWORD:
+            raise ValueError("FIRST_SUPERUSER_PASSWORD is required when AUTO_SEED_DEFAULT_ADMIN=true")
 
         return self
 

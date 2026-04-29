@@ -36,6 +36,7 @@ from app.db.models import User
 from app.schemas.user import UserCreate, User as UserSchema, UserPrivate
 from app.schemas.token import Token, TokenPayload
 from app.core.rate_limiter import limiter
+from app.core.domain_enums import ApprovalStatus, UserRole
 
 # Create the router — all routes here will be prefixed with /api/v1/auth
 router = APIRouter()
@@ -66,7 +67,7 @@ def _raise_unapproved_account(status_value: str | None) -> None:
 
 def _ensure_user_is_approved(user: User) -> None:
     """Ensure only approved users can authenticate or access protected routes."""
-    if (user.status or "").lower() != "approved":
+    if (user.status or "").lower() != ApprovalStatus.APPROVED.value:
         _raise_unapproved_account(user.status)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -211,8 +212,8 @@ async def register(request: Request, user_in: UserCreate, db: AsyncSession = Dep
         password_hash=await run_in_threadpool(security.get_password_hash, user_in.password),
         country=user_in.country,
         phone_number=user_in.phone_number,
-        role="Member",
-        status="pending",
+        role=UserRole.MEMBER.value,
+        status=ApprovalStatus.PENDING.value,
     )
     db.add(user)
     await db.commit()
