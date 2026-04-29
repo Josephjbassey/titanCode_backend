@@ -2,6 +2,7 @@ import hmac
 import hashlib
 import logging
 import json
+from decimal import Decimal
 from fastapi import APIRouter, Request, Header, HTTPException, Depends
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,11 +56,16 @@ async def paystack_webhook(
         if project_id_str:
             try:
                 payload_hash = hashlib.sha256(payload).hexdigest()
+                # Paystack amounts are in kobo (base unit * 100)
+                raw_amount = event.data.get("amount", 0)
+                amount_decimal = Decimal(str(raw_amount)) / 100
+                
                 await WebhookService.process_project_payment_success(
                     db=db_session,
                     provider="paystack",
                     event_id=x_paystack_event_id,
                     project_id=int(project_id_str),
+                    amount=amount_decimal,
                     payload_hash=payload_hash,
                 )
                 invoice_id = meta.get("invoice_id")
@@ -113,11 +119,16 @@ async def flutterwave_webhook(
         project_id_str = meta.get("project_id")
         if project_id_str:
             try:
+                # Flutterwave amounts are in the currency's major unit
+                raw_amount = event.data.get("amount", 0)
+                amount_decimal = Decimal(str(raw_amount))
+                
                 await WebhookService.process_project_payment_success(
                     db=db_session,
                     provider="flutterwave",
                     event_id=x_flutterwave_event_id,
                     project_id=int(project_id_str),
+                    amount=amount_decimal,
                     payload_hash=hashlib.sha256(payload).hexdigest(),
                 )
                 invoice_id = meta.get("invoice_id")

@@ -95,6 +95,7 @@ async def _initialize_flutterwave_payment(*, amount: Decimal, email: str, metada
 @router.post("/generate-invoice", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
 async def generate_invoice(
+    request: Request,
     body: GenerateInvoiceRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(allow_admin),
