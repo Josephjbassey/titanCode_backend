@@ -137,7 +137,7 @@ async def convert_lead_to_project(
     lead = res.scalars().first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    if lead.status in {"won", "converted"}:
+    if lead.status == "converted":
         existing_client = (await db.execute(select(User).where(User.email == lead.email))).scalars().first()
         if existing_client:
             existing_project = (
