@@ -34,6 +34,7 @@ from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
 from app.db.database import engine, AsyncSessionLocal
 from app.db.models import User
+from app.core.domain_enums import UserRole, ApprovalStatus
 from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing
 
 from slowapi.errors import RateLimitExceeded
@@ -70,8 +71,8 @@ async def seed_default_admin():
                 full_name="TitanCode Admin",
                 email=settings.FIRST_SUPERUSER,
                 password_hash=security.get_password_hash(settings.FIRST_SUPERUSER_PASSWORD),
-                role="CEO",
-                status="approved",
+                role=UserRole.CEO.value,
+                status=ApprovalStatus.APPROVED.value,
             )
             session.add(admin)
             await session.commit()
@@ -172,8 +173,13 @@ app.include_router(billing.router, prefix=f"{settings.API_V1_STR}/billing", tags
 # ═══════════════════════════════════════════════════════════════════════
 # HEALTH CHECK ENDPOINT
 # ═══════════════════════════════════════════════════════════════════════
-@app.get("/", tags=["health"])
-async def health_check():
+@app.get("/health/live", tags=["health"])
+async def liveness_check():
+    return {"status": "alive", "service": settings.PROJECT_NAME}
+
+
+@app.get("/health/ready", tags=["health"])
+async def readiness_check():
     """
     Simple health check endpoint.
 
@@ -190,3 +196,9 @@ async def health_check():
         await redis_client.close()
 
     return {"status": "healthy", "service": settings.PROJECT_NAME}
+
+
+@app.get("/", tags=["health"])
+async def health_check_root():
+    """Backward-compatible root health endpoint."""
+    return await readiness_check()
