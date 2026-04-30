@@ -1,3 +1,9 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not integration and not e2e'"
+markers = [
+  "unit: fast unit tests (sqlite/mocked)",
+  "integration: tests requiring postgres/redis or external services",
+  "e2e: full-stack tests via docker-compose",
+]

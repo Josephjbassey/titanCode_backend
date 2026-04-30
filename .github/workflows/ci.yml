@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main, work ]
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: test
+      RATE_LIMIT_ENABLED: "false"
+      SECRET_KEY: test_secret_key_for_ci_only
+      DATABASE_URL: sqlite+aiosqlite:///./titancode_test.db
+      FIRST_SUPERUSER_PASSWORD: TestAdminPass123!
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type checks
+        run: mypy app
+
+      - name: Unit tests
+        run: pytest -q -m "unit"
+
+      - name: Migration check
+        run: alembic check
