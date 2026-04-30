@@ -10,6 +10,7 @@ Usage:
 """
 
 import os
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -107,3 +108,15 @@ async def user_token_headers(client: AsyncClient):
     })
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-assign test tiers for selective execution in CI."""
+    for item in items:
+        path = str(item.fspath)
+        if "integration" in path:
+            item.add_marker(pytest.mark.integration)
+        elif "e2e" in path:
+            item.add_marker(pytest.mark.e2e)
+        else:
+            item.add_marker(pytest.mark.unit)

@@ -7,19 +7,25 @@ specifically project payout calculations and wallet updates.
 
 import logging
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.core.celery_app import celery_app
+from app.core.tasks import record_dead_letter
 from app.db.database import AsyncSessionLocal
 from app.db.models import Project, User, Wallet, Transaction, PayoutInvoice
+from app.services.financial_integrity import ensure_transaction_recorded, reconcile_wallet_ledgers
+from app.core.tasks import enqueue_email_task
+from app.core.config import settings
 
 # ── Structured JSON Logging ───────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
-@celery_app.task(name="process_payout_calculation")
+@celery_app.task(bind=True, name="process_payout_calculation", max_retries=5)
 def process_payout_calculation(
+    self,
     project_id: int,
     idempotency_key: str | None = None,
     externally_triggered: bool = False,
@@ -32,26 +38,24 @@ def process_payout_calculation(
     database operations use 'asyncio', we need this bridge to run our async 
     code inside the synchronous Celery worker.
     """
+    payload = {"project_id": project_id, "idempotency_key": idempotency_key, "externally_triggered": externally_triggered}
     try:
-        # Step 1: Get the current 'brain' (event loop) of the process.
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # Step 2: If no brain is active, create a new one.
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-    if loop.is_running():
-        # Step 3: If the brain is already thinking (running), safely schedule our task.
-        return asyncio.run_coroutine_threadsafe(
-            _process_payout_calculation_async(
-                project_id,
-                idempotency_key=idempotency_key,
-                externally_triggered=externally_triggered,
-            ),
-            loop,
-        ).result()
-    else:
-        # Step 4: Otherwise, run our async task until it finishes.
+        if loop.is_running():
+            return asyncio.run_coroutine_threadsafe(
+                _process_payout_calculation_async(
+                    project_id,
+                    idempotency_key=idempotency_key,
+                    externally_triggered=externally_triggered,
+                ),
+                loop,
+            ).result()
+
         return loop.run_until_complete(
             _process_payout_calculation_async(
                 project_id,
@@ -59,6 +63,22 @@ def process_payout_calculation(
                 externally_triggered=externally_triggered,
             )
         )
+    except Exception as exc:
+        retries = int(self.request.retries)
+        if retries >= int(self.max_retries):
+            record_dead_letter.delay(
+                failed_task=self.name,
+                payload=payload,
+                error_message=str(exc),
+                retries=retries,
+                failed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            logger.exception("Financial task exhausted retries", extra={"project_id": project_id})
+            raise
+
+        countdown = min(2 ** max(retries, 0), 300)
+        logger.warning("Retrying financial task", extra={"project_id": project_id, "retry": retries + 1, "countdown": countdown})
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 async def _process_payout_calculation_async(
@@ -153,6 +173,8 @@ async def _process_payout_calculation_async(
                         reference_id=f"{payout_key}:member:{member.id}",
                     )
                     session.add(transaction)
+                    await session.flush()
+                    await ensure_transaction_recorded(session, wallet_id=wallet.id, reference_id=transaction.reference_id)
 
                 # 5. COMPANY SHARE: The remaining 30% goes to the Company Treasury.
                 company_share = project.budget - total_member_payout
@@ -188,3 +210,28 @@ async def _process_payout_calculation_async(
             # If ANYTHING went wrong, the entire session is rolled back automatically.
             logger.error(f"Financial Engine: CRITICAL FAIL on Project {project_id}. Transaction rolled back.")
             raise
+
+
+@celery_app.task(name="run_daily_financial_reconciliation")
+def run_daily_financial_reconciliation() -> bool:
+    """Daily reconciliation job for wallet balances vs transaction ledger."""
+    async def _run() -> tuple[int, str]:
+        async with AsyncSessionLocal() as session:
+            rows = await reconcile_wallet_ledgers(session)
+            mismatches = [r for r in rows if r.delta != Decimal("0.00")]
+            report_lines = [
+                f"wallet_id={r.wallet_id} balance={r.recorded_balance} ledger={r.ledger_balance} delta={r.delta}"
+                for r in mismatches
+            ]
+            report = "\n".join(report_lines) if report_lines else "No mismatches detected."
+            return len(mismatches), report
+
+    mismatches, report = asyncio.run(_run())
+    logger.info("Daily financial reconciliation completed", extra={"mismatch_count": mismatches})
+    enqueue_email_task(
+        recipient_email=str(settings.FIRST_SUPERUSER),
+        subject="[TitanCode] Daily Financial Reconciliation Report",
+        body=f"Mismatch count: {mismatches}\n\n{report}",
+        html_content=None,
+    )
+    return mismatches == 0
