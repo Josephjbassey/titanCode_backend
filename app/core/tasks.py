@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from celery.exceptions import MaxRetriesExceededError
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.core.email import send_email
 from app.core.notifications import manager as notification_manager
 
@@ -50,7 +51,7 @@ def record_dead_letter(
     retries: int,
     failed_at: Optional[str] = None,
 ) -> bool:
-    """Persist dead-letter context in structured logs for auditing."""
+    """Persist dead-letter context in structured logs for auditing and alert admins."""
     timestamp = failed_at or datetime.now(timezone.utc).isoformat()
     logger.error(
         "Dead-lettered task after max retries",
@@ -62,6 +63,26 @@ def record_dead_letter(
             "failed_at": timestamp,
         },
     )
+
+    admin_email = getattr(settings, "FIRST_SUPERUSER", None)
+    if admin_email:
+        try:
+            _run_async(
+                send_email(
+                    recipient_email=str(admin_email),
+                    subject=f"[TitanCode Alert] Dead letter task: {failed_task}",
+                    body=(
+                        f"Task: {failed_task}\n"
+                        f"Failed at: {timestamp}\n"
+                        f"Retries: {retries}\n"
+                        f"Error: {error_message}\n"
+                        f"Payload: {payload}"
+                    ),
+                    html_content=None,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to send dead-letter admin alert", extra={"failed_task": failed_task})
     return True
 
 

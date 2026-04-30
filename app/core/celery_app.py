@@ -42,4 +42,11 @@ celery_app.conf.update(
         "send_websocket_notification": {"queue": "notifications"},
     },
     broker_transport_options={"visibility_timeout": 3600},
+    beat_schedule={
+        "daily-financial-reconciliation": {
+            "task": "run_daily_financial_reconciliation",
+            "schedule": 86400.0,
+            "options": {"queue": "default"},
+        }
+    },
 )

@@ -10,15 +10,16 @@ Usage:
 """
 
 import os
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import pool
 from sqlalchemy.future import select
 
-# Disable rate limiting during tests — all tests come from 127.0.0.1
-# and would quickly exceed the 5/minute login limit.
-os.environ["RATE_LIMIT_ENABLED"] = "false"
+from tests.bootstrap import bootstrap_test_env
+
+bootstrap_test_env()
 
 from app.core.config import settings
 from app.db.database import get_db
@@ -103,3 +104,15 @@ async def user_token_headers(client: AsyncClient):
     })
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-assign test tiers for selective execution in CI."""
+    for item in items:
+        path = str(item.fspath)
+        if "integration" in path:
+            item.add_marker(pytest.mark.integration)
+        elif "e2e" in path:
+            item.add_marker(pytest.mark.e2e)
+        else:
+            item.add_marker(pytest.mark.unit)

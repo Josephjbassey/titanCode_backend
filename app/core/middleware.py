@@ -26,6 +26,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.observability import set_correlation_id
+
 # Logger for request/response tracking
 logger = logging.getLogger("titancode.requests")
 
@@ -56,6 +58,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         """
         # ── Start the timer ────────────────────────────────────────────
         start_time = time.perf_counter()
+        correlation_id = set_correlation_id(request.headers.get("X-Correlation-ID"))
 
         # Get client IP (may be forwarded by a proxy)
         forwarded = request.headers.get("X-Forwarded-For")
@@ -69,7 +72,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.error(
                 f"{request.method} {request.url.path} → 500 ({duration_ms:.1f}ms) "
-                f"from {client_ip} — {type(e).__name__}: {e}"
+                f"from {client_ip} — {type(e).__name__}: {e}",
+                extra={"correlation_id": correlation_id},
             )
             raise
 
@@ -88,15 +92,16 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
 
         if status_code >= 500:
-            logger.error(log_message)
+            logger.error(log_message, extra={"correlation_id": correlation_id})
         elif status_code >= 400:
-            logger.warning(log_message)
+            logger.warning(log_message, extra={"correlation_id": correlation_id})
         else:
-            logger.info(log_message)
+            logger.info(log_message, extra={"correlation_id": correlation_id})
 
         # ── Add timing header to the response ──────────────────────────
         # Useful for frontend devs and debugging — they can see how long
         # the server took without needing access to server logs.
         response.headers["X-Process-Time"] = f"{duration_ms:.1f}ms"
+        response.headers["X-Correlation-ID"] = correlation_id
 
         return response
