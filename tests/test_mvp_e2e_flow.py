@@ -18,12 +18,7 @@ async def test_mvp_lead_to_paid_invoice_updates_dashboard_revenue(client, admin_
     monkeypatch.setattr("app.api.v1.endpoints.billing._initialize_paystack_payment", _fake_init_paystack_payment)
     monkeypatch.setattr("app.api.v1.endpoints.billing.enqueue_email_task", lambda *args, **kwargs: None)
 
-    class _DummyDelay:
-        @staticmethod
-        def delay(*args, **kwargs):
-            return None
-
-    monkeypatch.setattr("app.services.webhook_service.process_payout_calculation", _DummyDelay)
+    monkeypatch.setattr("app.tasks.financials.process_payout_calculation.delay", lambda *args, **kwargs: None)
 
     lead_payload = {
         "name": "E2E Client",

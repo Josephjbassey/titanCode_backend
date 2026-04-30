@@ -45,6 +45,10 @@ async def paystack_webhook(
         ts = int(x_paystack_timestamp)
         WebhookService.validate_timestamp(ts)
     except (ValueError, OverflowError):
+        logger.warning("Rejected paystack webhook: invalid timestamp header")
+        raise HTTPException(status_code=400, detail="Invalid timestamp header")
+    except WebhookValidationError as exc:
+        logger.warning("Rejected paystack webhook: replay/stale timestamp", extra={"event_id": x_paystack_event_id})
         logger.warning("Rejected flutterwave webhook: invalid timestamp header")
         raise HTTPException(status_code=400, detail="Invalid timestamp header")
     except WebhookValidationError as exc:
@@ -85,6 +89,7 @@ async def paystack_webhook(
                         invoice.provider_reference = x_paystack_event_id
                         await db_session.commit()
             except WebhookProcessingError as exc:
+                logger.error("Paystack webhook processing failed", extra={"event_id": x_paystack_event_id, "error": str(exc)})
                 logger.error("Flutterwave webhook processing failed", extra={"event_id": x_flutterwave_event_id, "error": str(exc)})
                 raise HTTPException(status_code=422, detail=str(exc))
 
@@ -113,6 +118,7 @@ async def flutterwave_webhook(
         ts = int(x_flutterwave_timestamp)
         WebhookService.validate_timestamp(ts)
     except (ValueError, OverflowError):
+        logger.warning("Rejected flutterwave webhook: invalid timestamp header")
         logger.warning("Rejected paystack webhook: invalid timestamp header")
         raise HTTPException(status_code=400, detail="Invalid timestamp header")
     except WebhookValidationError as exc:

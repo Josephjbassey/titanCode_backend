@@ -1,11 +1,18 @@
 import hashlib
 import hmac
 import json
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.core.config import settings
+
+
+@pytest.fixture(autouse=True)
+def _set_webhook_secrets(monkeypatch):
+    monkeypatch.setattr(settings, "PAYSTACK_SECRET_KEY", "test_paystack_secret")
+    monkeypatch.setattr(settings, "FLUTTERWAVE_SECRET_KEY", "test_flutterwave_secret")
 
 
 def _paystack_sig(raw: bytes) -> str:
@@ -50,7 +57,7 @@ async def test_paystack_webhook_rejects_replayed_timestamp(client):
 
 @pytest.mark.asyncio
 async def test_paystack_webhook_processes_success_event(client):
-    payload = {"event": "charge.success", "data": {"metadata": {"project_id": "42", "invoice_id": "inv_1"}, "amount": 1000}}
+    payload = {"event": "charge.success", "data": {"metadata": {"project_id": "42"}, "amount": 1000}}
     raw = json.dumps(payload).encode("utf-8")
 
     with patch("app.api.v1.endpoints.webhooks.WebhookService.process_project_payment_success", new_callable=AsyncMock) as mock_process:
@@ -60,7 +67,7 @@ async def test_paystack_webhook_processes_success_event(client):
             headers={
                 "x-paystack-signature": _paystack_sig(raw),
                 "x-paystack-event-id": "evt_ok",
-                "x-paystack-timestamp": "4102444800",
+                "x-paystack-timestamp": str(int(time.time())),
             },
         )
         assert response.status_code == 200
@@ -76,7 +83,7 @@ async def test_flutterwave_webhook_rejects_invalid_hash(client):
         headers={
             "verif-hash": "wrong",
             "x-flutterwave-event-id": "flw_1",
-            "x-flutterwave-timestamp": "4102444800",
+            "x-flutterwave-timestamp": str(int(time.time())),
         },
     )
     assert response.status_code == 401
@@ -94,7 +101,7 @@ async def test_flutterwave_webhook_valid_and_duplicate_event(client):
             headers={
                 "x-flutterwave-signature": _flutterwave_sig(raw),
                 "x-flutterwave-event-id": "flw_dup",
-                "x-flutterwave-timestamp": "4102444800",
+                "x-flutterwave-timestamp": str(int(time.time())),
             },
         )
         assert response.status_code == 200
