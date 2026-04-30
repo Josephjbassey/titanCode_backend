@@ -28,22 +28,27 @@ async def paystack_webhook(
     db_session: AsyncSession = Depends(get_db)
 ):
     if not x_paystack_signature or not x_paystack_event_id or not x_paystack_timestamp:
+        logger.warning("Rejected paystack webhook: missing headers")
         raise HTTPException(status_code=400, detail="Missing required webhook headers")
 
     payload = await request.body()
     secret = settings.PAYSTACK_SECRET_KEY or ""
     if not secret:
+        logger.error("Rejected paystack webhook: secret not configured")
         raise HTTPException(status_code=500, detail="Webhook secret is not configured")
     expected_hmac = hmac.new(secret.encode("utf-8"), payload, hashlib.sha512).hexdigest()
     if not hmac.compare_digest(expected_hmac, x_paystack_signature):
+        logger.warning("Rejected paystack webhook: invalid signature", extra={"event_id": x_paystack_event_id})
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
         ts = int(x_paystack_timestamp)
         WebhookService.validate_timestamp(ts)
     except (ValueError, OverflowError):
+        logger.warning("Rejected paystack webhook: invalid timestamp header")
         raise HTTPException(status_code=400, detail="Invalid timestamp header")
     except WebhookValidationError as exc:
+        logger.warning("Rejected paystack webhook: replay/stale timestamp", extra={"event_id": x_paystack_event_id})
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
@@ -51,7 +56,7 @@ async def paystack_webhook(
     except ValidationError:
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
     if event.event == "charge.success":
-        meta = event.data.get("metadata", {})
+        meta = event.data.get("metadata") or {}
         project_id_str = meta.get("project_id")
         if project_id_str:
             try:
@@ -80,6 +85,7 @@ async def paystack_webhook(
                         invoice.provider_reference = x_paystack_event_id
                         await db_session.commit()
             except WebhookProcessingError as exc:
+                logger.error("Paystack webhook processing failed", extra={"event_id": x_paystack_event_id, "error": str(exc)})
                 raise HTTPException(status_code=422, detail=str(exc))
 
     return {"status": "success"}
@@ -97,22 +103,27 @@ async def flutterwave_webhook(
 ):
     expected_secret = getattr(settings, "FLUTTERWAVE_WEBHOOK_SECRET", None) or settings.FLUTTERWAVE_SECRET_KEY
     if not expected_secret:
+        logger.error("Rejected flutterwave webhook: secret not configured")
         raise HTTPException(status_code=500, detail="Webhook secret is not configured")
     if not x_flutterwave_event_id or not x_flutterwave_timestamp:
+        logger.warning("Rejected flutterwave webhook: missing headers")
         raise HTTPException(status_code=400, detail="Missing required webhook headers")
 
     try:
         ts = int(x_flutterwave_timestamp)
         WebhookService.validate_timestamp(ts)
     except (ValueError, OverflowError):
+        logger.warning("Rejected flutterwave webhook: invalid timestamp header")
         raise HTTPException(status_code=400, detail="Invalid timestamp header")
     except WebhookValidationError as exc:
+        logger.warning("Rejected flutterwave webhook: replay/stale timestamp", extra={"event_id": x_flutterwave_event_id})
         raise HTTPException(status_code=400, detail=str(exc))
 
     payload = await request.body()
     expected_hmac = hmac.new(expected_secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
     signature = x_flutterwave_signature or verif_hash
     if not signature or not hmac.compare_digest(signature, expected_hmac):
+        logger.warning("Rejected flutterwave webhook: invalid signature", extra={"event_id": x_flutterwave_event_id})
         raise HTTPException(status_code=401, detail="Invalid signature")
     try:
         event = FlutterwaveWebhookEnvelope.model_validate_json(payload)
@@ -120,7 +131,7 @@ async def flutterwave_webhook(
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
 
     if event.event == "charge.completed" and event.data.get("status") == "successful":
-        meta = event.data.get("meta", {})
+        meta = event.data.get("meta") or {}
         project_id_str = meta.get("project_id")
         if project_id_str:
             try:
@@ -148,6 +159,7 @@ async def flutterwave_webhook(
                         invoice.provider_reference = x_flutterwave_event_id
                         await db_session.commit()
             except WebhookProcessingError as exc:
+                logger.error("Flutterwave webhook processing failed", extra={"event_id": x_flutterwave_event_id, "error": str(exc)})
                 raise HTTPException(status_code=422, detail=str(exc))
 
     return {"status": "success"}
