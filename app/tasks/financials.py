@@ -16,6 +16,9 @@ from app.core.celery_app import celery_app
 from app.core.tasks import record_dead_letter
 from app.db.database import AsyncSessionLocal
 from app.db.models import Project, User, Wallet, Transaction, PayoutInvoice
+from app.services.financial_integrity import ensure_transaction_recorded, reconcile_wallet_ledgers
+from app.core.tasks import enqueue_email_task
+from app.core.config import settings
 
 # ── Structured JSON Logging ───────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -170,6 +173,8 @@ async def _process_payout_calculation_async(
                         reference_id=f"{payout_key}:member:{member.id}",
                     )
                     session.add(transaction)
+                    await session.flush()
+                    await ensure_transaction_recorded(session, wallet_id=wallet.id, reference_id=transaction.reference_id)
 
                 # 5. COMPANY SHARE: The remaining 30% goes to the Company Treasury.
                 company_share = project.budget - total_member_payout
@@ -205,3 +210,28 @@ async def _process_payout_calculation_async(
             # If ANYTHING went wrong, the entire session is rolled back automatically.
             logger.error(f"Financial Engine: CRITICAL FAIL on Project {project_id}. Transaction rolled back.")
             raise
+
+
+@celery_app.task(name="run_daily_financial_reconciliation")
+def run_daily_financial_reconciliation() -> bool:
+    """Daily reconciliation job for wallet balances vs transaction ledger."""
+    async def _run() -> tuple[int, str]:
+        async with AsyncSessionLocal() as session:
+            rows = await reconcile_wallet_ledgers(session)
+            mismatches = [r for r in rows if r.delta != Decimal("0.00")]
+            report_lines = [
+                f"wallet_id={r.wallet_id} balance={r.recorded_balance} ledger={r.ledger_balance} delta={r.delta}"
+                for r in mismatches
+            ]
+            report = "\n".join(report_lines) if report_lines else "No mismatches detected."
+            return len(mismatches), report
+
+    mismatches, report = asyncio.run(_run())
+    logger.info("Daily financial reconciliation completed", extra={"mismatch_count": mismatches})
+    enqueue_email_task(
+        recipient_email=str(settings.FIRST_SUPERUSER),
+        subject="[TitanCode] Daily Financial Reconciliation Report",
+        body=f"Mismatch count: {mismatches}\n\n{report}",
+        html_content=None,
+    )
+    return mismatches == 0

@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pythonjsonlogger.json import JsonFormatter
 
 from app.core.config import settings
+from app.core.observability import get_correlation_id
 
 
 class TitanCodeJsonFormatter(JsonFormatter):
@@ -73,6 +74,7 @@ class TitanCodeJsonFormatter(JsonFormatter):
         # Include the logger name and module for traceability
         log_record["logger"] = record.name
         log_record["module"] = record.module
+        log_record["correlation_id"] = getattr(record, "correlation_id", None) or get_correlation_id()
 
 
 def setup_logging(log_level: str = "INFO") -> None:
