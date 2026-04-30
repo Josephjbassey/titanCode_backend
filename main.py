@@ -32,6 +32,7 @@ from app.core import security
 from app.core.logging_config import setup_logging
 from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
+from app.core.observability import init_sentry
 from app.db.database import engine, AsyncSessionLocal
 from app.db.models import User
 from app.core.domain_enums import UserRole, ApprovalStatus
@@ -98,6 +99,12 @@ async def lifespan(app: FastAPI):
     # ── Startup ─────────────────────────────────────────────────────
     # Step 1: Initialize structured JSON logging (must be first)
     setup_logging()
+
+    init_sentry()
+
+    # Step 2: enforce secure bootstrap posture for non-development environments.
+    if not settings.is_dev_environment and settings.AUTO_SEED_DEFAULT_ADMIN:
+        logger.warning("AUTO_SEED_DEFAULT_ADMIN is enabled in %s; disable after initial bootstrap.", settings.ENVIRONMENT)
 
     # Step 2: Seed the default admin account only when explicitly enabled
     if settings.AUTO_SEED_DEFAULT_ADMIN:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Optional
+from contextlib import nullcontext
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,7 +48,8 @@ class WalletService:
             raise WalletServiceError("Transaction type must be 'credit' or 'debit'")
 
         try:
-            async with db.begin():
+            tx_ctx = nullcontext() if db.in_transaction() else db.begin()
+            async with tx_ctx:
                 wallet_row = await db.execute(
                     select(Wallet).where(Wallet.id == wallet_id).with_for_update()
                 )
@@ -86,6 +88,8 @@ class WalletService:
                 )
                 db.add(transaction)
 
+            if db.in_transaction():
+                await db.commit()
             await db.refresh(wallet)
             await db.refresh(transaction)
             return transaction, wallet, False

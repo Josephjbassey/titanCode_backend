@@ -7,7 +7,7 @@ the project root so that secrets are never hardcoded in source code.
 
 Usage:
     from app.core.config import settings
-    print(settings.SECRET_KEY)
+    print(settings.PROJECT_NAME)
 """
 
 from typing import Optional
@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     FLUTTERWAVE_SECRET_KEY: Optional[str] = None
     FLUTTERWAVE_WEBHOOK_SECRET: Optional[str] = None
 
+    # ── Observability ─────────────────────────────────────────────────────
+    SENTRY_DSN: Optional[str] = None
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
     # ── Miscellaneous ───────────────────────────────────────────────────
     VERSION: str = "1.0.0"
     RATE_LIMIT_ENABLED: bool = True
@@ -112,6 +116,14 @@ class Settings(BaseSettings):
         """Fail fast when insecure bootstrap defaults are used outside dev/test."""
         if self.AUTO_SEED_DEFAULT_ADMIN and not self.FIRST_SUPERUSER_PASSWORD:
             raise ValueError("FIRST_SUPERUSER_PASSWORD is required when AUTO_SEED_DEFAULT_ADMIN=true")
+
+        default_bootstrap_password = "TitanCodeAdmin123!"
+        if (
+            not self.is_dev_environment
+            and self.AUTO_SEED_DEFAULT_ADMIN
+            and self.FIRST_SUPERUSER_PASSWORD == default_bootstrap_password
+        ):
+            raise ValueError("Default bootstrap password is not allowed outside development/test environments")
 
         return self
 

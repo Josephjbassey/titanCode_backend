@@ -1,9 +1,11 @@
+from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import Project, WebhookEvent, AuditLog
+import logging
 from app.core.domain_enums import ProjectStatus
 
 
@@ -14,6 +16,8 @@ class WebhookValidationError(Exception):
 class WebhookProcessingError(Exception):
     pass
 
+
+logger = logging.getLogger(__name__)
 
 class WebhookService:
     @staticmethod
@@ -29,6 +33,7 @@ class WebhookService:
         provider: str,
         event_id: str,
         project_id: int,
+        amount: Decimal,
         payload_hash: str,
     ) -> None:
         try:
@@ -53,6 +58,10 @@ class WebhookService:
                 if not project:
                     raise WebhookProcessingError(f"Project {project_id} not found")
 
+                # Synchronize Project Budget with actual payment amount
+                project.budget = amount
+                
+                # Update status to COMPLETED if not already
                 if project.status != ProjectStatus.COMPLETED.value:
                     previous = project.status
                     project.status = ProjectStatus.COMPLETED.value
@@ -63,10 +72,17 @@ class WebhookService:
                             action="project_status_transition",
                             target_type="project",
                             target_id=project_id,
-                            details={"from": previous, "to": ProjectStatus.COMPLETED.value, "source": provider},
+                            details={"from": previous, "to": ProjectStatus.COMPLETED.value, "source": provider, "budget_sync": str(amount)},
                         )
                     )
+            
+            # TRIGGER FINANCIAL ENGINE
+            # Note: We do this OUTSIDE the database transaction block to avoid long-lived locks 
+            # if the task execution is slow, although the task itself handles its own transactions.
+            from app.tasks.financials import process_payout_calculation
+            process_payout_calculation.delay(project_id=project_id)
+            
         except IntegrityError:
-            # Duplicate webhook delivery under concurrency; treat as idempotent success.
             await db.rollback()
+            logger.info("Duplicate webhook event ignored", extra={"provider": provider, "event_id": event_id})
             return
