@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import Project, WebhookEvent, AuditLog
+import logging
 from app.core.domain_enums import ProjectStatus
 
 
@@ -15,6 +16,8 @@ class WebhookValidationError(Exception):
 class WebhookProcessingError(Exception):
     pass
 
+
+logger = logging.getLogger(__name__)
 
 class WebhookService:
     @staticmethod
@@ -76,12 +79,10 @@ class WebhookService:
             # TRIGGER FINANCIAL ENGINE
             # Note: We do this OUTSIDE the database transaction block to avoid long-lived locks 
             # if the task execution is slow, although the task itself handles its own transactions.
-            from app.tasks.financials import process_payout_calculation_async
-            # We send it to celery if available, or call it directly. 
-            # In this architecture, it seems to be a Celery task.
-            process_payout_calculation_async.delay(project_id=project_id)
+            from app.tasks.financials import process_payout_calculation
+            process_payout_calculation.delay(project_id=project_id)
             
         except IntegrityError:
-            # Duplicate webhook delivery under concurrency; treat as idempotent success.
             await db.rollback()
+            logger.info("Duplicate webhook event ignored", extra={"provider": provider, "event_id": event_id})
             return
