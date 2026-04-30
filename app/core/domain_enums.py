@@ -1,4 +1,10 @@
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11 compatibility
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
 
 
 class UserRole(StrEnum):
