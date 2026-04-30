@@ -3,7 +3,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -16,6 +16,7 @@ from app.core.tasks import enqueue_email_task
 from fastapi.concurrency import run_in_threadpool
 
 from app.core.rate_limiter import limiter
+from app.services.billing_service import BillingService
 router = APIRouter()
 
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -191,28 +192,22 @@ async def generate_invoice(
 @router.get("/invoices")
 async def list_invoices(
     status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    q = select(ClientInvoice).order_by(ClientInvoice.created_at.desc())
-    if status_filter:
-        q = q.where(ClientInvoice.status == status_filter)
-    return (await db.execute(q)).scalars().all()
+    return await BillingService.list_invoices(db, status_filter=status_filter, limit=limit, offset=offset)
 
 
 @router.get("/invoices/{invoice_id}")
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
-    invoice = (await db.execute(select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id))).scalars().first()
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    return invoice
+    return await BillingService.get_invoice_or_404(db, invoice_id)
 
 
 @router.post("/invoices/{invoice_id}/initialize-payment")
 async def initialize_payment(invoice_id: str, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
-    invoice = (await db.execute(select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id))).scalars().first()
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
+    invoice = await BillingService.get_invoice_or_404(db, invoice_id)
     if invoice.status in {"paid", "cancelled"}:
         raise HTTPException(status_code=409, detail=f"Cannot initialize payment for {invoice.status} invoice")
     metadata = {"invoice_id": invoice.invoice_id, "project_id": str(invoice.project_id)}
@@ -231,9 +226,7 @@ async def mark_invoice_status(invoice_id: str, body: InvoiceStatusUpdateRequest,
     allowed = {"paid", "cancelled", "failed", "sent", "draft", "payment_pending"}
     if body.status not in allowed:
         raise HTTPException(status_code=400, detail=f"Unsupported status {body.status}")
-    invoice = (await db.execute(select(ClientInvoice).where(ClientInvoice.invoice_id == invoice_id))).scalars().first()
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
+    invoice = await BillingService.get_invoice_or_404(db, invoice_id)
     invoice.status = body.status
     await db.commit()
     await db.refresh(invoice)
