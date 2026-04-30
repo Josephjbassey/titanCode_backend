@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     FLUTTERWAVE_SECRET_KEY: Optional[str] = None
     FLUTTERWAVE_WEBHOOK_SECRET: Optional[str] = None
 
+    # ── Observability ─────────────────────────────────────────────────────
+    SENTRY_DSN: Optional[str] = None
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
     # ── Miscellaneous ───────────────────────────────────────────────────
     VERSION: str = "1.0.0"
     RATE_LIMIT_ENABLED: bool = True
