@@ -17,9 +17,13 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy import pool
 from sqlalchemy.future import select
 
-from tests.bootstrap import bootstrap_test_env
-
-bootstrap_test_env()
+# Disable rate limiting during tests — all tests come from 127.0.0.1
+# and would quickly exceed the 5/minute login limit.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
+# Provide deterministic defaults for local/CI test bootstrapping when env vars are absent.
+os.environ.setdefault("SECRET_KEY", "test_secret_key_for_ci_only")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./titancode_test.db")
+os.environ.setdefault("FIRST_SUPERUSER_PASSWORD", "TestAdminPass123!")
 
 from app.core.config import settings
 from app.db.database import get_db

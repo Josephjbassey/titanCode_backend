@@ -6,6 +6,7 @@ except ImportError:  # Python < 3.11 compatibility
     class StrEnum(str, Enum):
         def __str__(self) -> str:
             return str(self.value)
+        pass
 
 
 class UserRole(StrEnum):
