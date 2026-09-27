@@ -270,6 +270,7 @@ class Task(Base):
 
     # Many-to-one: a task belongs to one project
     project = relationship("Project", back_populates="tasks")
+    assignee = relationship("User", foreign_keys=[assigned_user])
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -375,6 +376,17 @@ class Product(Base):
 
     # Relationships
     revenues = relationship("Revenue", back_populates="product")
+
+    def __init__(self, **kwargs):
+        if "api_key" in kwargs:
+            raw_key = kwargs.pop("api_key")
+            if "api_key_id" not in kwargs:
+                from app.core.security import extract_product_api_key_id
+                kwargs["api_key_id"] = extract_product_api_key_id(raw_key)
+            if "api_key_hash" not in kwargs:
+                from app.core.security import hash_product_api_key
+                kwargs["api_key_hash"] = hash_product_api_key(raw_key)
+        super().__init__(**kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════

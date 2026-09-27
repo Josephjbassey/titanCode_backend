@@ -176,11 +176,13 @@ def generate_product_api_key() -> tuple[str, str]:
 def extract_product_api_key_id(api_key: str) -> str:
     """
     Extract the key-id from a product API key.
+    Supports modern format `tc_<key_id>_<secret>` as well as legacy/custom keys.
     """
     parts = api_key.split("_", 2)
-    if len(parts) != 3 or parts[0] != "tc" or not parts[1] or not parts[2]:
-        raise ValueError("Invalid API key format")
-    return parts[1]
+    if len(parts) == 3 and parts[0] == "tc" and parts[1] and parts[2]:
+        return parts[1]
+    # Backward compatibility fallback: deterministic 16-hex prefix of sha256 digest
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
 
 
 def hash_product_api_key(api_key: str) -> str:

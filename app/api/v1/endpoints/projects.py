@@ -22,6 +22,9 @@ from app.schemas.project import (
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.services.project_service import ProjectService
+from app.core.notifications import manager as notification_manager
+from app.core.email import send_email
+from app.tasks.financials import process_payout_calculation
 
 # Create a new router instance
 router = APIRouter()
@@ -111,14 +114,103 @@ async def update_project(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_managers),
 ) -> Any:
-    result = await db.execute(select(Project).where(Project.id == project_id))
+    result = await db.execute(
+        select(Project).options(selectinload(Project.members)).where(Project.id == project_id)
+    )
     project = result.scalars().first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    updated_project = await ProjectService.update_project(db, project, project_in)
-    updated_project.member_ids = [m.id for m in updated_project.members]
-    return updated_project
+    # Step 2: Apply only the fields that were sent (partial update)
+    update_data = project_in.model_dump(exclude_unset=True, exclude={"member_ids"})
+    
+    # Financial Logic: Check if status is transitioning to COMPLETED
+    trigger_payout = False
+    if project_in.status == "completed" and project.status != "completed":
+        trigger_payout = True
+
+    for field, value in update_data.items():
+        setattr(project, field, value)
+        
+    # Step 3: Update Members (M2M) if provided
+    if project_in.member_ids is not None:
+        res = await db.execute(select(User).where(User.id.in_(project_in.member_ids)))
+        project.members = res.scalars().all()
+
+    # Step 4: Save changes
+    await db.commit()
+    await db.refresh(project, attribute_names=["members"])
+    
+    # Step 5: Trigger Background Payout Task (Constraint #2 compliance)
+    if trigger_payout:
+        process_payout_calculation.delay(project.id)
+
+    # Step 6: Notify client on status change
+    if project_in.status and project.client_id:
+        client_result = await db.execute(select(User).where(User.id == project.client_id))
+        client = client_result.scalars().first()
+
+        status_display = project.status.upper()
+        status_messages = {
+            "active": "Great news! Work on your project has officially started.",
+            "completed": "Your project has been completed. Our team will follow up shortly.",
+            "cancelled": "Your project has been cancelled. Please contact us for details.",
+            "pending": "Your project is now under review.",
+        }
+        status_note = status_messages.get(project.status, f"Status changed to: {project.status}")
+
+        # WebSocket real-time push
+        await notification_manager.send_personal_message(
+            user_id=project.client_id,
+            message={
+                "type": "project_update",
+                "title": f"Project Update: {project.name}",
+                "message": status_note,
+                "project_id": project.id,
+                "status": project.status,
+            },
+        )
+
+        # Email notification to client
+        if client and client.email:
+            await send_email(
+                recipient_email=client.email,
+                subject=f"Project Update: {project.name} — {status_display}",
+                body=(
+                    f"Hi {client.full_name},\n\n"
+                    f"{status_note}\n\n"
+                    f"Project: {project.name}\n"
+                    f"Status:  {status_display}\n\n"
+                    f"If you have any questions, just reply to this email.\n\n"
+                    f"— The TitanCode Team"
+                ),
+                html_content=(
+                    f"<p>Hi <strong>{client.full_name}</strong>,</p>"
+                    f"<p>{status_note}</p>"
+                    f"<table style='border-collapse:collapse;font-family:sans-serif;'>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Project</td><td style='padding:6px;'>{project.name}</td></tr>"
+                    f"<tr><td style='padding:6px;font-weight:bold;'>Status</td><td style='padding:6px;'>{status_display}</td></tr>"
+                    f"</table>"
+                    f"<p>If you have any questions, just reply to this email.</p>"
+                    f"<br><p>— The TitanCode Team</p>"
+                ),
+            )
+
+    # Step 7: Notify newly assigned team members
+    if project_in.member_ids is not None:
+        for member_id in project_in.member_ids:
+            await notification_manager.send_personal_message(
+                user_id=member_id,
+                message={
+                    "type": "project_assigned",
+                    "title": "Added to Project 🚀",
+                    "message": f"You've been added to the project: {project.name}",
+                    "project_id": project.id,
+                },
+            )
+
+    project.member_ids = [m.id for m in project.members]
+    return project
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

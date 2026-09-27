@@ -161,7 +161,15 @@ class ConnectionManager:
 
     async def _publish_personal_message(self, user_id: int, message: Dict[str, Any]) -> None:
         payload = json.dumps({"user_id": user_id, "message": message})
-        await self.redis.publish("notifications:personal", payload)
+        try:
+            await self.redis.publish("notifications:personal", payload)
+        except Exception:
+            try:
+                self.redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                await self.redis.publish("notifications:personal", payload)
+            except Exception as e:
+                logger.warning(f"Failed to publish notification to redis: {e}")
+
 
     async def _deliver_local_message(self, user_id: int, message: Dict[str, Any]) -> None:
         if user_id not in self.active_connections:

@@ -5,10 +5,14 @@ This module contains all authentication-related API routes and the
 dependency injection utilities for protecting other routes.
 
 Endpoints:
-    POST /auth/register  — Create a new user account.
-    POST /auth/login     — Authenticate and receive access + refresh tokens.
-    POST /auth/refresh   — Exchange a refresh token for a new access token.
-    GET  /auth/profile   — Retrieve the currently logged-in user's profile.
+    POST /auth/register                     — Create a new user account.
+    POST /auth/login                        — Authenticate and receive access + refresh tokens.
+    POST /auth/refresh                      — Exchange a refresh token for a new access token.
+    GET  /auth/profile                      — Retrieve the currently logged-in user's profile.
+    POST /auth/forgot-password/request-otp  — Send a 6-digit OTP to the user's email.
+    POST /auth/forgot-password/verify-otp   — Validate the OTP; return a short-lived reset token.
+    POST /auth/forgot-password/reset        — Reset the password using the reset token.
+    POST /auth/change-password              — Change password for an authenticated user.
 
 Security Utilities (used by other endpoint modules):
     get_current_user()       — Dependency that extracts and validates the JWT.
@@ -16,11 +20,14 @@ Security Utilities (used by other endpoint modules):
     RoleChecker              — Callable class for Role-Based Access Control (RBAC).
 """
 
-from datetime import timedelta
+import random
+import string
+from datetime import timedelta, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any, List
@@ -31,12 +38,75 @@ from jwt.exceptions import InvalidTokenError
 from app.core.config import settings
 from app.core import security
 from app.core.email import send_email
+from app.core.tasks import enqueue_email_task
 from app.db.database import get_db
 from app.db.models import User
-from app.schemas.user import UserCreate, User as UserSchema, UserPrivate
+from app.schemas.user import UserCreate, User as UserSchema, UserPrivate, UserUpdate
 from app.schemas.token import Token, TokenPayload
 from app.core.rate_limiter import limiter
 from app.core.domain_enums import ApprovalStatus, UserRole
+from redis.asyncio import Redis
+
+# ---------------------------------------------------------------------------
+# Redis-backed OTP store with in-memory fallback:
+# ---------------------------------------------------------------------------
+_redis_client: Redis | None = None
+_otp_store: dict[str, tuple[str, datetime]] = {}
+
+def _get_redis() -> Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis_client
+
+async def _save_otp(email: str, code: str, expire_seconds: int = 600) -> None:
+    try:
+        r = _get_redis()
+        await r.setex(f"otp:{email}", expire_seconds, code)
+        return
+    except Exception:
+        pass
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
+    _otp_store[email] = (code, expires_at)
+
+async def _get_and_delete_otp(email: str) -> str | None:
+    try:
+        r = _get_redis()
+        val = await r.get(f"otp:{email}")
+        if val:
+            await r.delete(f"otp:{email}")
+            return val
+    except Exception:
+        pass
+    entry = _otp_store.pop(email, None)
+    if entry:
+        code, expires_at = entry
+        if datetime.now(timezone.utc) <= expires_at:
+            return code
+    return None
+
+# ---------------------------------------------------------------------------
+# Request/response bodies for the forgot-password flow
+# ---------------------------------------------------------------------------
+class OtpRequestBody(BaseModel):
+    email: EmailStr
+
+class OtpVerifyBody(BaseModel):
+    email: EmailStr
+    code: str | None = None
+    otp: str | None = None
+
+class PasswordResetBody(BaseModel):
+    reset_token: str | None = None
+    token: str | None = None
+    new_password: str | None = None
+    password: str | None = None
+
+class ChangePasswordBody(BaseModel):
+    current_password: str | None = None
+    old_password: str | None = None
+    new_password: str | None = None
+    password: str | None = None
 
 # Create the router — all routes here will be prefixed with /api/v1/auth
 router = APIRouter()
@@ -365,3 +435,254 @@ async def read_current_user(
     """
     _ensure_user_is_approved(current_user)
     return current_user
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Update current user's profile
+# ═══════════════════════════════════════════════════════════════════════
+@router.put("/profile", response_model=UserPrivate)
+async def update_current_user_profile(
+    user_in: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """
+    Update the profile of the currently authenticated user.
+
+    Prevents privilege escalation: non-admin users cannot alter their role,
+    approval status, or department directly.
+    """
+    _ensure_user_is_approved(current_user)
+    update_data = user_in.model_dump(exclude_unset=True)
+    if current_user.role not in ["CEO", "Admin"]:
+        update_data.pop("role", None)
+        update_data.pop("status", None)
+        update_data.pop("department_id", None)
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Request OTP for password reset
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/forgot-password/request-otp")
+@limiter.limit("5/minute")
+async def request_otp(
+    request: Request,
+    body: OtpRequestBody,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Step 1 of the forgot-password flow.
+
+    Generates a 6-digit numeric OTP, stores it in Redis (with fallback) with a 10-minute
+    expiry, and sends it to the registered email address.
+
+    Returns a generic success response regardless of whether the email
+    exists — this prevents user enumeration attacks.
+    """
+    stmt = select(User).where(User.email == body.email)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    if user:
+        otp_code = "".join(random.choices(string.digits, k=6))
+        await _save_otp(body.email, otp_code, expire_seconds=600)
+
+        enqueue_email_task(
+            recipient_email=body.email,
+            subject="TitanCode — Your Password Reset Code",
+            body=(
+                f"Hi {user.full_name},\n\n"
+                f"Your password reset code is: {otp_code}\n\n"
+                f"This code expires in 10 minutes. "
+                f"If you did not request a password reset, please ignore this email.\n\n"
+                f"— The TitanCode Team"
+            ),
+            html_content=(
+                f"<p>Hi <strong>{user.full_name}</strong>,</p>"
+                f"<p>Your password reset code is:</p>"
+                f"<p style='font-size:32px;font-weight:bold;letter-spacing:8px;text-align:center;"
+                f"padding:16px;background:#f5f5f5;border-radius:8px;margin:16px 0;'>{otp_code}</p>"
+                f"<p>This code expires in <strong>10 minutes</strong>.</p>"
+                f"<p style='color:#888;font-size:12px;'>If you did not request a password reset, "
+                f"please ignore this email.</p>"
+                f"<br><p>— The TitanCode Team</p>"
+            ),
+        )
+
+    # Always return success to prevent email enumeration
+    return {"success": True, "message": f"If {body.email} is registered, a reset code has been sent."}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Verify OTP and issue a short-lived reset token
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/forgot-password/verify-otp")
+@limiter.limit("10/minute")
+async def verify_otp(
+    request: Request,
+    body: OtpVerifyBody,
+) -> Any:
+    """
+    Step 2 of the forgot-password flow.
+
+    Validates the 6-digit OTP. If valid, issues a short-lived JWT
+    reset token (15 minutes) that the frontend passes to /reset.
+    The OTP is deleted after verification (single-use).
+
+    Returns:
+        { success: True, reset_token: "<jwt>" }
+    """
+    submitted_code = (body.code or body.otp or "").strip()
+    if not submitted_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code is required.",
+        )
+
+    stored_code = await _get_and_delete_otp(body.email)
+
+    if not stored_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No pending reset code found. Please request a new one.",
+        )
+
+    if submitted_code != stored_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect code. Please try again.",
+        )
+
+    # Issue a short-lived reset token (type="password_reset")
+    reset_token = jwt.encode(
+        {
+            "sub": body.email,
+            "type": "password_reset",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
+        },
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+    return {"success": True, "reset_token": reset_token}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Reset password using the reset token
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/forgot-password/reset")
+@limiter.limit("5/minute")
+async def reset_password(
+    request: Request,
+    body: PasswordResetBody,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Step 3 of the forgot-password flow.
+
+    Validates the reset JWT, looks up the user by email, and updates
+    their password hash. The token is single-use by design (it is not
+    stored, so it can only be validated once against the same JWT).
+    """
+    token = body.reset_token or body.token
+    new_password = body.new_password or body.password
+
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired reset token.",
+    )
+
+    if not token or not new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token and new password are required.",
+        )
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "password_reset":
+            raise credentials_exception
+        email: str = payload.get("sub")
+        if not email:
+            raise credentials_exception
+    except InvalidTokenError:
+        raise credentials_exception
+
+    stmt = select(User).where(User.email == email)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    if not user:
+        raise credentials_exception
+
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be at least 8 characters.",
+        )
+
+    user.password_hash = await run_in_threadpool(security.get_password_hash, new_password)
+    await db.commit()
+
+    return {"success": True, "message": "Password has been reset successfully. You can now log in."}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Change password (authenticated user)
+# ═══════════════════════════════════════════════════════════════════════
+@router.post("/change-password")
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    body: ChangePasswordBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """
+    Change the password for the currently authenticated user.
+
+    Requires the current password to be supplied for verification —
+    this prevents a stolen access token from being used to change the password.
+    """
+    current_password = body.current_password or body.old_password
+    new_password = body.new_password or body.password
+
+    if not current_password or not new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password and new password are required.",
+        )
+
+    password_matches = await run_in_threadpool(
+        security.verify_password,
+        current_password,
+        current_user.password_hash,
+    )
+
+    if not password_matches:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="New password must be at least 8 characters.",
+        )
+
+    if current_password == new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password.",
+        )
+
+    current_user.password_hash = await run_in_threadpool(security.get_password_hash, new_password)
+    await db.commit()
+
+    return {"success": True, "message": "Password has been updated successfully."}

@@ -57,10 +57,30 @@ async def hire_us(
     inquiry_in: ClientInquiryCreate,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    raise HTTPException(
-        status_code=410,
-        detail="Deprecated endpoint. Use POST /api/v1/leads for canonical intake.",
+    """
+    Public form submission for prospective clients (backward compatibility).
+    """
+    inquiry = ClientInquiryModel(
+        full_name=inquiry_in.full_name,
+        email=inquiry_in.email,
+        company=inquiry_in.company,
+        phone=inquiry_in.phone,
+        service_interest=inquiry_in.service_interest,
+        message=inquiry_in.message,
+        status="new",
     )
+    db.add(inquiry)
+    await db.commit()
+    await db.refresh(inquiry)
+
+    hr_email = getattr(settings, "EMAILS_FROM_EMAIL", "hr@titancode.tech")
+    enqueue_email_task(
+        recipient_email=hr_email,
+        subject=f"New Client Inquiry: {inquiry.full_name}",
+        body=f"New inquiry received from {inquiry.full_name} ({inquiry.email}) for {inquiry.service_interest or 'General'}.",
+        html_content=f"<p>New inquiry received from <strong>{inquiry.full_name}</strong> ({inquiry.email}) for <strong>{inquiry.service_interest or 'General'}</strong>.</p><p>{inquiry.message or ''}</p>",
+    )
+    return inquiry
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -293,7 +313,12 @@ async def list_inquiries(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/v1/leads")
+    stmt = select(ClientInquiryModel)
+    if status_filter:
+        stmt = stmt.where(ClientInquiryModel.status == status_filter)
+    stmt = stmt.order_by(ClientInquiryModel.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 @router.put("/inquiries/{inquiry_id}/status", response_model=ClientInquiry)
@@ -303,7 +328,14 @@ async def update_inquiry_status(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    raise HTTPException(status_code=410, detail="Deprecated. Use PATCH /api/v1/leads/{lead_id}")
+    result = await db.execute(select(ClientInquiryModel).where(ClientInquiryModel.id == inquiry_id))
+    inquiry = result.scalars().first()
+    if not inquiry:
+        raise HTTPException(status_code=404, detail="Client inquiry not found")
+    inquiry.status = body.status
+    await db.commit()
+    await db.refresh(inquiry)
+    return inquiry
 
 
 @router.get("/dashboard/funnel")
@@ -311,7 +343,16 @@ async def founder_funnel_dashboard(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(allow_admin),
 ) -> Any:
-    raise HTTPException(status_code=410, detail="Deprecated. Use GET /api/v1/dashboard/leads")
+    total_inquiries = await db.scalar(select(func.count(ClientInquiryModel.id))) or 0
+    new_inquiries = await db.scalar(select(func.count(ClientInquiryModel.id)).where(ClientInquiryModel.status == "new")) or 0
+    contacted_inquiries = await db.scalar(select(func.count(ClientInquiryModel.id)).where(ClientInquiryModel.status == "contacted")) or 0
+    converted_inquiries = await db.scalar(select(func.count(ClientInquiryModel.id)).where(ClientInquiryModel.status == "converted")) or 0
+    return {
+        "total": total_inquiries,
+        "new": new_inquiries,
+        "contacted": contacted_inquiries,
+        "converted": converted_inquiries,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════

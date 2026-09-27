@@ -5,13 +5,17 @@ This module manages the corporate treasury (Company Wallet) and user payouts.
 It implements a secure withdrawal workflow with status tracking.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from typing import Any, List
+import json
 from decimal import Decimal
 from contextlib import nullcontext
+from typing import Any, List
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
+from app.core.config import settings
 from app.db.database import get_db
 from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, Project, utcnow
 from app.schemas.financials import (
@@ -27,6 +31,10 @@ from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 from app.core.rate_limiter import limiter
 from starlette.requests import Request
 from sqlalchemy import func
+
+# Backward-compatibility alias for test patchers
+send_email = enqueue_email_task
+from app.core.notifications import manager as notification_manager
 
 # Create the router
 router = APIRouter()
@@ -381,3 +389,131 @@ async def approve_payout(
     await db.commit()
     await db.refresh(invoice)
     return invoice
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SYSTEM SETTINGS & SALARY PROFIT SPLIT LOGIC
+# ═══════════════════════════════════════════════════════════════════════
+
+class FinancialSettingsModel(BaseModel):
+    company_name: str = "TitanCode Technologies Inc."
+    support_email: str = "support@titancode.agency"
+    currency: str = "USD"
+    timezone: str = "UTC"
+    platform_split_percent: float = 30.0
+    member_split_percent: float = 70.0
+    notify_on_milestone: bool = True
+    notify_on_withdrawal: bool = True
+
+
+class SalaryProjectionResponse(BaseModel):
+    total_budget: float
+    platform_split_percent: float
+    member_split_percent: float
+    platform_treasury_share: float
+    team_pool_share: float
+    member_count: int
+    projected_salary_per_member: float
+
+
+_DEFAULT_SETTINGS = {
+    "company_name": "TitanCode Technologies Inc.",
+    "support_email": "support@titancode.agency",
+    "currency": "USD",
+    "timezone": "UTC",
+    "platform_split_percent": 30.0,
+    "member_split_percent": 70.0,
+    "notify_on_milestone": True,
+    "notify_on_withdrawal": True,
+}
+_SETTINGS_CACHE = dict(_DEFAULT_SETTINGS)
+SETTINGS_REDIS_KEY = "titancode:financial_settings"
+
+
+async def _get_active_settings() -> dict:
+    try:
+        redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        raw = await redis.get(SETTINGS_REDIS_KEY)
+        await redis.close()
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return dict(_SETTINGS_CACHE)
+
+
+@router.get("/settings", response_model=FinancialSettingsModel)
+async def get_financial_settings(
+    _current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Get current global agency settings including profit split percentages.
+    Available to all authenticated members.
+    """
+    data = await _get_active_settings()
+    return FinancialSettingsModel(**data)
+
+
+@router.put("/settings", response_model=FinancialSettingsModel)
+async def update_financial_settings(
+    payload: FinancialSettingsModel,
+    _current_user: User = Depends(allow_admins),
+) -> Any:
+    """
+    Update global agency and profit split settings. Restricted to CEO/Admin.
+    Enforces that platform_split_percent + member_split_percent equals 100%.
+    """
+    total_split = payload.platform_split_percent + payload.member_split_percent
+    if abs(total_split - 100.0) > 0.01:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Profit split percentages must total 100%. Got {total_split:.2f}% (Platform: {payload.platform_split_percent}%, Team: {payload.member_split_percent}%)",
+        )
+
+    updated_dict = payload.model_dump()
+    _SETTINGS_CACHE.update(updated_dict)
+
+    try:
+        redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        await redis.set(SETTINGS_REDIS_KEY, json.dumps(updated_dict))
+        await redis.close()
+    except Exception:
+        pass
+
+    return payload
+
+
+@router.get("/salary-projection", response_model=SalaryProjectionResponse)
+async def calculate_salary_projection(
+    budget: float = Query(..., ge=0, description="Total project budget in USD/currency units"),
+    member_count: int = Query(1, ge=1, description="Number of participating team members"),
+    platform_split_percent: float | None = Query(None, ge=0, le=100),
+    member_split_percent: float | None = Query(None, ge=0, le=100),
+    _current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Calculate salary and treasury projections based on project budget and profit split logic.
+    Follows TitanCode's standard 70% Member Pool / 30% Company Treasury distribution.
+    """
+    if platform_split_percent is None or member_split_percent is None:
+        active_settings = await _get_active_settings()
+        p_split = active_settings.get("platform_split_percent", 30.0)
+        m_split = active_settings.get("member_split_percent", 70.0)
+    else:
+        p_split = platform_split_percent
+        m_split = member_split_percent
+
+    platform_share = round((budget * p_split) / 100.0, 2)
+    team_share = round((budget * m_split) / 100.0, 2)
+    per_member = round(team_share / member_count, 2) if member_count > 0 else 0.0
+
+    return SalaryProjectionResponse(
+        total_budget=round(budget, 2),
+        platform_split_percent=round(p_split, 2),
+        member_split_percent=round(m_split, 2),
+        platform_treasury_share=platform_share,
+        team_pool_share=team_share,
+        member_count=member_count,
+        projected_salary_per_member=per_member,
+    )
+

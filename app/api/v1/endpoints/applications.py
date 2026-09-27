@@ -23,13 +23,15 @@ API Routes (all prefixed with /api/v1/applications):
 """
 
 from datetime import datetime, timezone
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import Any
 from sqlalchemy import func
 
-
+from app.core import security
 from app.db.database import get_db
 from app.db.models import Application, User, Department
 from app.schemas.application import (
@@ -341,3 +343,157 @@ async def reject_application(
         )
 
     return application
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST /applications/public-apply — Public candidate intake flow
+# ═══════════════════════════════════════════════════════════════════════
+class PublicApplicationCreate(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    full_name: str | None = None
+    name: str | None = None
+    email: EmailStr
+    phone_number: str | None = None
+    phone: str | None = None
+    country: str | None = "Nigeria"
+    department_name: str | None = None
+    department_id: int | None = None
+    linkedin_url: str | None = None
+    github_url: str | None = None
+    portfolio_url: str | None = None
+    portfolio: str | None = None
+    about: str | None = None
+
+
+@router.post("/public-apply", status_code=status.HTTP_201_CREATED)
+async def public_application(
+    payload: PublicApplicationCreate,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Public zero-friction application intake for prospective engineering members.
+    Creates an applicant account if none exists and records the application for HR/Manager review.
+    """
+    # 0. Resolve applicant naming & contact info
+    f_name = payload.first_name
+    l_name = payload.last_name
+    if not f_name:
+        raw_name = payload.full_name or payload.name or "Candidate"
+        parts = raw_name.strip().split(" ", 1)
+        f_name = parts[0]
+        l_name = parts[1] if len(parts) > 1 else ""
+    elif not l_name:
+        l_name = ""
+
+    full_name = f"{f_name} {l_name}".strip()
+    phone_number = payload.phone_number or payload.phone
+    portfolio_link = payload.portfolio_url or payload.portfolio or payload.linkedin_url
+
+    # 1. Resolve target department
+    dept = None
+    if payload.department_id:
+        dept = (await db.execute(select(Department).where(Department.id == payload.department_id))).scalars().first()
+    elif payload.department_name:
+        dept = (await db.execute(
+            select(Department).where(Department.name.ilike(f"%{payload.department_name.strip()}%"))
+        )).scalars().first()
+
+    if not dept:
+        # Fallback to the first existing department in database
+        dept = (await db.execute(select(Department))).scalars().first()
+        if not dept:
+            # Bootstrap a default Engineering department if DB has no departments
+            dept = Department(name="Engineering", description="Core Platform Engineering Division")
+            db.add(dept)
+            await db.flush()
+
+    # 2. Check user record
+    stmt = select(User).where(User.email == payload.email)
+    user = (await db.execute(stmt)).scalars().first()
+
+    if user:
+        if user.role in ["CEO", "Admin", "Manager", "Member"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An active account with this email already exists. Please sign in to your dashboard.",
+            )
+        # Check if already has a pending application
+        existing_app = (await db.execute(
+            select(Application).where(
+                Application.user_id == user.id,
+                Application.status == "pending",
+            )
+        )).scalars().first()
+        if existing_app:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You already have a pending application. Our team is currently reviewing your profile.",
+            )
+    else:
+        # Create shadow/pending applicant user
+        temp_password = secrets.token_urlsafe(16)
+        user = User(
+            full_name=full_name,
+            email=payload.email,
+            password_hash=security.get_password_hash(temp_password),
+            role="Applicant",
+            status="pending",
+            country=payload.country or "Nigeria",
+            phone_number=phone_number,
+            github_url=payload.github_url,
+            portfolio_url=portfolio_link,
+            department_id=dept.id,
+        )
+        db.add(user)
+        await db.flush()
+
+    # 3. Create the Application record
+    application = Application(
+        user_id=user.id,
+        department_id=dept.id,
+        github_url=payload.github_url,
+        portfolio=portfolio_link,
+        status="pending",
+    )
+    db.add(application)
+    await db.commit()
+    await db.refresh(application)
+
+    # 4. Notify applicant via email
+    enqueue_email_task(
+        recipient_email=payload.email,
+        subject="Your Application to TitanCode Technologies Has Been Received",
+        body=(
+            f"Hi {f_name},\n\n"
+            f"Thank you for applying to join the {dept.name} department at TitanCode Technologies!\n\n"
+            f"Our technical leads and HR team are reviewing your qualifications and portfolio. "
+            f"We will be in touch with next steps regarding technical evaluation.\n\n"
+            f"— The TitanCode Talent Team"
+        ),
+        html_content=(
+            f"<p>Hi <strong>{f_name}</strong>,</p>"
+            f"<p>Thank you for applying to join the <strong>{dept.name}</strong> department at TitanCode Technologies!</p>"
+            f"<p>Our technical leads and HR team are reviewing your qualifications and portfolio. "
+            f"We will be in touch shortly regarding next steps.</p>"
+            f"<br><p>— The TitanCode Talent Team</p>"
+        ),
+    )
+
+    # 5. Notify HR/Managers via WebSocket & internal email
+    enqueue_websocket_task(
+        user_id=1,  # Broadcast to admin/HR
+        message={
+            "type": "new_application",
+            "title": f"New Candidate: {user.full_name} 💼",
+            "message": f"Applied for {dept.name}. Portfolio and GitHub ready for review.",
+            "application_id": application.id,
+        },
+    )
+
+    return {
+        "success": True,
+        "message": "Application submitted successfully! Our team will review your portfolio.",
+        "application_id": application.id,
+    }
+

@@ -1,5 +1,6 @@
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any
+from typing import Any, List, Optional
 from uuid import uuid4
 
 import httpx
@@ -21,9 +22,28 @@ router = APIRouter()
 
 allow_admin = RoleChecker(["CEO", "Admin"])
 
+class ClientInvoiceResponse(BaseModel):
+    id: int
+    invoice_id: str
+    project_id: int
+    client_email: str
+    total_amount: Decimal
+    currency: str = "USD"
+    provider: Optional[str] = None
+    payment_url: Optional[str] = None
+    provider_reference: Optional[str] = None
+    status: str
+    notes: Optional[str] = None
+    created_by: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
 class InvoiceItem(BaseModel):
     description: str
     amount: float
+
 
 class GenerateInvoiceRequest(BaseModel):
     project_id: int
@@ -189,7 +209,7 @@ async def generate_invoice(
     }
 
 
-@router.get("/invoices")
+@router.get("/invoices", response_model=List[ClientInvoiceResponse])
 async def list_invoices(
     status_filter: str | None = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
@@ -200,7 +220,7 @@ async def list_invoices(
     return await BillingService.list_invoices(db, status_filter=status_filter, limit=limit, offset=offset)
 
 
-@router.get("/invoices/{invoice_id}")
+@router.get("/invoices/{invoice_id}", response_model=ClientInvoiceResponse)
 async def get_invoice(invoice_id: str, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
     return await BillingService.get_invoice_or_404(db, invoice_id)
 
@@ -221,7 +241,7 @@ async def initialize_payment(invoice_id: str, db: AsyncSession = Depends(get_db)
     return {"invoice_id": invoice.invoice_id, "payment_url": payment_url, "status": invoice.status}
 
 
-@router.patch("/invoices/{invoice_id}/status")
+@router.patch("/invoices/{invoice_id}/status", response_model=ClientInvoiceResponse)
 async def mark_invoice_status(invoice_id: str, body: InvoiceStatusUpdateRequest, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
     allowed = {"paid", "cancelled", "failed", "sent", "draft", "payment_pending"}
     if body.status not in allowed:

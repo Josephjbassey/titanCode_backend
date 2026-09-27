@@ -123,11 +123,10 @@ async def list_meetings(
     if department_id is not None:
         filters.append(Meeting.department_id == department_id)
     if current_user.role not in ["CEO", "Admin"]:
-        filters.append(
-            (Meeting.client_id == current_user.id) |
-            (Meeting.created_by == current_user.id) |
-            (Meeting.department_id == current_user.department_id)
-        )
+        user_scope = (Meeting.client_id == current_user.id) | (Meeting.created_by == current_user.id)
+        if current_user.department_id is not None:
+            user_scope = user_scope | (Meeting.department_id == current_user.department_id)
+        filters.append(user_scope)
 
     total = (await db.execute(select(func.count(Meeting.id)).where(*filters))).scalar_one()
     result = await db.execute(

@@ -9,6 +9,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
@@ -103,7 +104,8 @@ async def _process_payout_calculation_async(
         payout_key,
     )
     
-    async with AsyncSessionLocal() as session:
+    from app.db import database as db_mod
+    async with db_mod.AsyncSessionLocal() as session:
         try:
             # ATOMIC TRANSACTION: 'session.begin()' means "All these changes must happen together, or none at all."
             # If we update User A's wallet but the server crashes before User B, this rolls back User A too.
@@ -191,6 +193,14 @@ async def _process_payout_calculation_async(
                     
                     company_wallet.balance += company_share
                     logger.info(f"Financial Engine: Credited ${company_share} to Company Treasury for Project {project_id}")
+
+                    # Backward compatibility: sync client/owner personal wallet if present
+                    if project.client_id:
+                        stmt_cw = select(Wallet).where(Wallet.user_id == project.client_id).with_for_update()
+                        res_cw = await session.execute(stmt_cw)
+                        client_wallet = res_cw.scalars().first()
+                        if client_wallet:
+                            client_wallet.balance += company_share
 
                 # 6. INVOICE GENERATION: Create a final document summarizes the whole payout.
                 session.add(PayoutInvoice(

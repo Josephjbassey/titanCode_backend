@@ -12,6 +12,8 @@ from app.core.config import settings
 from app.core.tasks import enqueue_email_task
 from app.db.database import get_db
 from app.db.models import ClientInquiry, Project, User
+from app.schemas.client import ClientInquiry as ClientInquirySchema
+from app.schemas.project import Project as ProjectSchema
 
 router = APIRouter()
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -29,14 +31,18 @@ LEAD_ALLOWED_TRANSITIONS = {
 
 
 class LeadCreate(BaseModel):
-    name: str
+    name: str | None = None
+    full_name: str | None = None
     email: EmailStr
     phone: str | None = None
+    phone_number: str | None = None
     company: str | None = None
     project_type: str | None = None
+    service_interest: str | None = None
     budget_range: str | None = None
     timeline: str | None = None
     description: str | None = None
+    message: str | None = None
     source: str | None = "direct"
 
 
@@ -46,8 +52,19 @@ class LeadUpdate(BaseModel):
     lost_reason: str | None = None
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+class LeadListResponse(BaseModel):
+    items: list[ClientInquirySchema]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.post("", response_model=ClientInquirySchema, status_code=status.HTTP_201_CREATED)
 async def create_lead(payload: LeadCreate, db: AsyncSession = Depends(get_db)) -> Any:
+    contact_name = payload.name or payload.full_name or "Potential Client"
+    contact_phone = payload.phone or payload.phone_number
+    contact_interest = payload.project_type or payload.service_interest
+    contact_desc = payload.description or payload.message or ""
     qualification_suffix = (
         f"\n\n[qualification]\n"
         f"budget_range={payload.budget_range or 'N/A'}\n"
@@ -55,12 +72,12 @@ async def create_lead(payload: LeadCreate, db: AsyncSession = Depends(get_db)) -
         f"source={payload.source or 'N/A'}"
     )
     inquiry = ClientInquiry(
-        full_name=payload.name,
+        full_name=contact_name,
         email=payload.email,
-        phone=payload.phone,
+        phone=contact_phone,
         company=payload.company,
-        service_interest=payload.project_type,
-        message=(payload.description or "") + qualification_suffix,
+        service_interest=contact_interest,
+        message=contact_desc + qualification_suffix,
         status="new",
     )
     db.add(inquiry)
@@ -128,7 +145,7 @@ async def create_lead(payload: LeadCreate, db: AsyncSession = Depends(get_db)) -
     return inquiry
 
 
-@router.get("")
+@router.get("", response_model=LeadListResponse)
 async def list_leads(
     status_filter: str | None = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
@@ -147,7 +164,7 @@ async def list_leads(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-@router.get("/{lead_id}")
+@router.get("/{lead_id}", response_model=ClientInquirySchema)
 async def get_lead(lead_id: int, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
     result = await db.execute(select(ClientInquiry).where(ClientInquiry.id == lead_id))
     lead = result.scalars().first()
@@ -156,7 +173,7 @@ async def get_lead(lead_id: int, db: AsyncSession = Depends(get_db), _current_us
     return lead
 
 
-@router.patch("/{lead_id}")
+@router.patch("/{lead_id}", response_model=ClientInquirySchema)
 async def update_lead(lead_id: int, body: LeadUpdate, db: AsyncSession = Depends(get_db), _current_user: User = Depends(allow_admin)) -> Any:
     result = await db.execute(select(ClientInquiry).where(ClientInquiry.id == lead_id))
     lead = result.scalars().first()
@@ -176,7 +193,7 @@ async def update_lead(lead_id: int, body: LeadUpdate, db: AsyncSession = Depends
     return lead
 
 
-@router.post("/{lead_id}/convert-to-project", status_code=status.HTTP_201_CREATED)
+@router.post("/{lead_id}/convert-to-project", response_model=ProjectSchema, status_code=status.HTTP_201_CREATED)
 async def convert_lead_to_project(
     lead_id: int,
     db: AsyncSession = Depends(get_db),
@@ -229,4 +246,92 @@ async def convert_lead_to_project(
     lead.status = "converted"
     await db.commit()
     await db.refresh(project)
+    project.member_ids = []
     return project
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# POST /leads/contact — Public "Contact Us" form submission
+# ═══════════════════════════════════════════════════════════════════════
+class ContactCreate(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    name: str | None = None
+    full_name: str | None = None
+    email: EmailStr
+    subject: str = "General Inquiry"
+    message: str
+
+
+@router.post("/contact", response_model=ClientInquirySchema, status_code=status.HTTP_201_CREATED)
+async def create_contact(payload: ContactCreate, db: AsyncSession = Depends(get_db)) -> Any:
+    """
+    Handle submissions from the public Contact Us form.
+
+    Stores the inquiry as a new lead (source='contact_form') and
+    notifies the internal team via email.
+    """
+    f_name = payload.first_name
+    l_name = payload.last_name
+    if not f_name:
+        raw_name = payload.name or payload.full_name or "Friend"
+        parts = raw_name.strip().split(" ", 1)
+        f_name = parts[0]
+        l_name = parts[1] if len(parts) > 1 else ""
+    elif not l_name:
+        l_name = ""
+
+    contact_full_name = f"{f_name} {l_name}".strip()
+
+    inquiry = ClientInquiry(
+        full_name=contact_full_name,
+        email=payload.email,
+        service_interest=payload.subject,
+        message=payload.message,
+        status="new",
+    )
+    db.add(inquiry)
+    await db.commit()
+    await db.refresh(inquiry)
+
+    # Notify internal team
+    hr_email = settings.EMAILS_FROM_EMAIL or "info@titancode.com"
+    enqueue_email_task(
+        recipient_email=hr_email,
+        subject=f"[Contact Form] {payload.subject} — {payload.first_name} {payload.last_name}",
+        body=(
+            f"New contact form submission:\n\n"
+            f"From: {payload.first_name} {payload.last_name} <{payload.email}>\n"
+            f"Subject: {payload.subject}\n\n"
+            f"Message:\n{payload.message}"
+        ),
+        html_content=(
+            f"<h3>New Contact Form Submission</h3>"
+            f"<p><strong>From:</strong> {payload.first_name} {payload.last_name} "
+            f"&lt;{payload.email}&gt;</p>"
+            f"<p><strong>Subject:</strong> {payload.subject}</p>"
+            f"<p><strong>Message:</strong><br>{payload.message.replace(chr(10), '<br>')}</p>"
+        ),
+    )
+
+    # Auto-reply to sender
+    enqueue_email_task(
+        recipient_email=payload.email,
+        subject=f"We received your message — TitanCode Technologies",
+        body=(
+            f"Hi {payload.first_name},\n\n"
+            f"Thank you for reaching out! We've received your message regarding "
+            f'"{payload.subject}" and our team will get back to you shortly.\n\n'
+            f"Best regards,\n"
+            f"The TitanCode Team"
+        ),
+        html_content=(
+            f"<p>Hi <strong>{payload.first_name}</strong>,</p>"
+            f"<p>Thank you for reaching out! We've received your message regarding "
+            f"<strong>{payload.subject}</strong> and our team will get back to you shortly.</p>"
+            f"<br><p>Best regards,<br><strong>The TitanCode Team</strong></p>"
+        ),
+    )
+
+    return {"success": True, "message": "Your message has been received. We'll be in touch soon!"}
