@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -42,8 +43,9 @@ async def test_duplicate_reject_action_is_idempotent(
         lambda *args, **kwargs: asyncio.sleep(0),
     )
 
-    user_headers = await _register_and_login_user(client, db_session, "dup_action_user@test.com")
-    user = (await db_session.execute(select(User).where(User.email == "dup_action_user@test.com"))).scalars().first()
+    email = f"dup_action_{uuid.uuid4().hex[:8]}@test.com"
+    user_headers = await _register_and_login_user(client, db_session, email)
+    user = (await db_session.execute(select(User).where(User.email == email))).scalars().first()
     wallet = Wallet(user_id=user.id, balance=Decimal("100.00"), currency="USD")
     db_session.add(wallet)
     await db_session.commit()
@@ -87,8 +89,9 @@ async def test_concurrent_conflicting_actions_allow_only_one_transition(
         lambda *args, **kwargs: asyncio.sleep(0),
     )
 
-    user_headers = await _register_and_login_user(client, db_session, "concurrent_action_user@test.com")
-    user = (await db_session.execute(select(User).where(User.email == "concurrent_action_user@test.com"))).scalars().first()
+    email = f"concurrent_action_{uuid.uuid4().hex[:8]}@test.com"
+    user_headers = await _register_and_login_user(client, db_session, email)
+    user = (await db_session.execute(select(User).where(User.email == email))).scalars().first()
     db_session.add(Wallet(user_id=user.id, balance=Decimal("100.00"), currency="USD"))
     await db_session.commit()
 
@@ -110,16 +113,17 @@ async def test_concurrent_conflicting_actions_allow_only_one_transition(
         json={"status": "rejected"},
         headers=admin_token_headers,
     )
-    responses = await asyncio.gather(approve_req, reject_req)
 
+    responses = await asyncio.gather(approve_req, reject_req)
     status_codes = sorted([r.status_code for r in responses])
     assert status_codes == [200, 409]
 
 
 @pytest.mark.asyncio
 async def test_payout_task_rolls_back_on_partial_failure(db_session: AsyncSession):
-    admin = User(email="rollback_admin@test.com", password_hash="pw", full_name="Admin", role="Admin")
-    member = User(email="rollback_member@test.com", password_hash="pw", full_name="Member", role="Member")
+    suffix = uuid.uuid4().hex[:8]
+    admin = User(email=f"rollback_admin_{suffix}@test.com", password_hash="pw", full_name="Admin", role="Admin")
+    member = User(email=f"rollback_member_{suffix}@test.com", password_hash="pw", full_name="Member", role="Member")
     db_session.add_all([admin, member])
     await db_session.commit()
 
@@ -154,8 +158,9 @@ async def test_paid_transition_requires_idempotency_key(
         lambda *args, **kwargs: asyncio.sleep(0),
     )
 
-    user_headers = await _register_and_login_user(client, db_session, "idempotency_user@test.com")
-    user = (await db_session.execute(select(User).where(User.email == "idempotency_user@test.com"))).scalars().first()
+    email = f"idempotency_{uuid.uuid4().hex[:8]}@test.com"
+    user_headers = await _register_and_login_user(client, db_session, email)
+    user = (await db_session.execute(select(User).where(User.email == email))).scalars().first()
     db_session.add(Wallet(user_id=user.id, balance=Decimal("80.00"), currency="USD"))
     await db_session.commit()
 
@@ -180,23 +185,26 @@ async def test_paid_transition_requires_idempotency_key(
     )
     assert missing_key.status_code == 400
 
+    idem_key = f"pay_key_{uuid.uuid4().hex[:8]}"
+    idem_other = f"pay_key_{uuid.uuid4().hex[:8]}"
+
     paid = await client.post(
         f"/api/v1/financials/withdrawals/{withdrawal_id}/action",
-        json={"status": "paid", "idempotency_key": "pay_key_12345"},
+        json={"status": "paid", "idempotency_key": idem_key},
         headers=admin_token_headers,
     )
     assert paid.status_code == 200
 
     replay = await client.post(
         f"/api/v1/financials/withdrawals/{withdrawal_id}/action",
-        json={"status": "paid", "idempotency_key": "pay_key_12345"},
+        json={"status": "paid", "idempotency_key": idem_key},
         headers=admin_token_headers,
     )
     assert replay.status_code == 200
 
     conflict = await client.post(
         f"/api/v1/financials/withdrawals/{withdrawal_id}/action",
-        json={"status": "paid", "idempotency_key": "pay_key_other"},
+        json={"status": "paid", "idempotency_key": idem_other},
         headers=admin_token_headers,
     )
     assert conflict.status_code == 409
@@ -204,4 +212,5 @@ async def test_paid_transition_requires_idempotency_key(
     withdrawal = (
         await db_session.execute(select(Withdrawal).where(Withdrawal.id == withdrawal_id))
     ).scalars().first()
-    assert withdrawal.external_payout_idempotency_key == "pay_key_12345"
+    assert withdrawal.external_payout_idempotency_key == idem_key
+

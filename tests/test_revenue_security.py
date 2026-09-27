@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 
 import pytest
 
@@ -46,7 +47,7 @@ def _signed_headers(api_key: str, body: bytes, timestamp: int, nonce: str) -> di
 async def test_revenue_report_accepts_valid_signature(client, db_session, fake_replay_cache):
     admin = User(
         full_name="Revenue Admin",
-        email="revenue_admin_valid@test.com",
+        email=f"revenue_admin_valid_{uuid.uuid4().hex[:8]}@test.com",
         password_hash="hash",
         role="CEO",
         status="approved",
@@ -54,7 +55,7 @@ async def test_revenue_report_accepts_valid_signature(client, db_session, fake_r
     db_session.add(admin)
     await db_session.flush()
 
-    api_key = "revenue-secret-key-valid"
+    api_key = f"revenue-secret-key-valid-{uuid.uuid4().hex[:6]}"
     product = Product(name="Revenue Tool", api_key=api_key, created_by=admin.id)
     db_session.add(product)
     await db_session.commit()
@@ -73,7 +74,7 @@ async def test_revenue_report_accepts_valid_signature(client, db_session, fake_r
 async def test_revenue_report_rejects_invalid_signature(client, db_session, fake_replay_cache):
     admin = User(
         full_name="Revenue Admin",
-        email="revenue_admin_invalid@test.com",
+        email=f"revenue_admin_invalid_{uuid.uuid4().hex[:8]}@test.com",
         password_hash="hash",
         role="CEO",
         status="approved",
@@ -81,7 +82,7 @@ async def test_revenue_report_rejects_invalid_signature(client, db_session, fake
     db_session.add(admin)
     await db_session.flush()
 
-    api_key = "revenue-secret-key-invalid"
+    api_key = f"revenue-secret-key-invalid-{uuid.uuid4().hex[:6]}"
     product = Product(name="Revenue Tool", api_key=api_key, created_by=admin.id)
     db_session.add(product)
     await db_session.commit()
@@ -99,7 +100,7 @@ async def test_revenue_report_rejects_invalid_signature(client, db_session, fake
 async def test_revenue_report_rejects_replayed_nonce(client, db_session, fake_replay_cache):
     admin = User(
         full_name="Revenue Admin",
-        email="revenue_admin_replay@test.com",
+        email=f"revenue_admin_replay_{uuid.uuid4().hex[:8]}@test.com",
         password_hash="hash",
         role="CEO",
         status="approved",
@@ -107,7 +108,7 @@ async def test_revenue_report_rejects_replayed_nonce(client, db_session, fake_re
     db_session.add(admin)
     await db_session.flush()
 
-    api_key = "revenue-secret-key-replay"
+    api_key = f"revenue-secret-key-replay-{uuid.uuid4().hex[:6]}"
     product = Product(name="Revenue Tool", api_key=api_key, created_by=admin.id)
     db_session.add(product)
     await db_session.commit()
@@ -130,7 +131,7 @@ async def test_unknown_api_key_does_not_consume_nonce(client, db_session, fake_r
     body = json.dumps({"amount": "8.00", "source": "Unknown Key"}, separators=(",", ":")).encode("utf-8")
     timestamp = int(time.time())
     nonce = "nonce-unknown-key"
-    api_key = "future-real-key"
+    api_key = f"future-real-key-{uuid.uuid4().hex[:6]}"
 
     unknown_headers = _signed_headers(api_key=api_key, body=body, timestamp=timestamp, nonce=nonce)
     rejected = await client.post("/api/v1/revenue/report", content=body, headers=unknown_headers)
@@ -139,7 +140,7 @@ async def test_unknown_api_key_does_not_consume_nonce(client, db_session, fake_r
 
     admin = User(
         full_name="Revenue Admin",
-        email="revenue_admin_late_product@test.com",
+        email=f"revenue_admin_late_product_{uuid.uuid4().hex[:8]}@test.com",
         password_hash="hash",
         role="CEO",
         status="approved",

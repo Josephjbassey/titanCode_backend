@@ -26,6 +26,24 @@ async def login_as_admin(client: AsyncClient):
     return response.json().get("access_token")
 
 
+async def get_admin_user_id(client: AsyncClient, token: str) -> int:
+    profile = await client.get("/api/v1/auth/profile", headers={"Authorization": f"Bearer {token}"})
+    return profile.json()["id"]
+
+
+async def ensure_admin_wallet(client: AsyncClient, token: str) -> tuple[int, int]:
+    admin_id = await get_admin_user_id(client, token)
+    wallet_resp = await client.get(f"/api/v1/wallets/{admin_id}", headers={"Authorization": f"Bearer {token}"})
+    if wallet_resp.status_code == 404:
+        create_resp = await client.post(
+            "/api/v1/wallets/create",
+            json={"user_id": admin_id, "currency": "USD"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return admin_id, create_resp.json()["id"]
+    return admin_id, wallet_resp.json()["id"]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # WALLET CREATION
 # ═══════════════════════════════════════════════════════════════════════
@@ -34,18 +52,19 @@ async def login_as_admin(client: AsyncClient):
 async def test_create_wallet(client: AsyncClient):
     """Test that an admin can create a wallet for a user."""
     admin_token = await login_as_admin(client)
+    admin_id = await get_admin_user_id(client, admin_token)
 
-    # Create a wallet for user ID 1 (the admin themselves for simplicity)
+    # Create a wallet for the admin user
     response = await client.post(
         "/api/v1/wallets/create",
-        json={"user_id": 1, "currency": "USD"},
+        json={"user_id": admin_id, "currency": "USD"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     # Accept 201 (first run) or 400 (wallet already exists from prior runs)
     assert response.status_code in (201, 400)
     if response.status_code == 201:
         data = response.json()
-        assert data["user_id"] == 1
+        assert data["user_id"] == admin_id
         assert float(data["balance"]) == 0.00
         assert data["currency"] == "USD"
 
@@ -54,10 +73,11 @@ async def test_create_wallet(client: AsyncClient):
 async def test_create_duplicate_wallet(client: AsyncClient):
     """Test that creating a second wallet for the same user fails."""
     admin_token = await login_as_admin(client)
+    admin_id, _ = await ensure_admin_wallet(client, admin_token)
 
     response = await client.post(
         "/api/v1/wallets/create",
-        json={"user_id": 1, "currency": "USD"},
+        json={"user_id": admin_id, "currency": "USD"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert response.status_code == 400
@@ -72,13 +92,7 @@ async def test_create_duplicate_wallet(client: AsyncClient):
 async def test_credit_wallet(client: AsyncClient):
     """Test that an admin can credit money to a wallet."""
     admin_token = await login_as_admin(client)
-
-    # Get the wallet to find its ID
-    wallet_resp = await client.get(
-        "/api/v1/wallets/1",
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    wallet_id = wallet_resp.json()["id"]
+    _, wallet_id = await ensure_admin_wallet(client, admin_token)
 
     # Credit $500
     response = await client.post(
@@ -105,12 +119,7 @@ async def test_credit_wallet(client: AsyncClient):
 async def test_debit_wallet(client: AsyncClient):
     """Test that a valid debit reduces the balance."""
     admin_token = await login_as_admin(client)
-
-    wallet_resp = await client.get(
-        "/api/v1/wallets/1",
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    wallet_id = wallet_resp.json()["id"]
+    _, wallet_id = await ensure_admin_wallet(client, admin_token)
 
     # Debit $200 from the $500 we credited
     response = await client.post(
@@ -131,12 +140,7 @@ async def test_debit_wallet(client: AsyncClient):
 async def test_overdraw_protection(client: AsyncClient):
     """Test that debiting more than the balance is rejected."""
     admin_token = await login_as_admin(client)
-
-    wallet_resp = await client.get(
-        "/api/v1/wallets/1",
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    wallet_id = wallet_resp.json()["id"]
+    _, wallet_id = await ensure_admin_wallet(client, admin_token)
 
     # Try to debit $999,999 (way more than balance)
     response = await client.post(
@@ -161,12 +165,7 @@ async def test_overdraw_protection(client: AsyncClient):
 async def test_transaction_history(client: AsyncClient):
     """Test that transaction history returns all recorded transactions."""
     admin_token = await login_as_admin(client)
-
-    wallet_resp = await client.get(
-        "/api/v1/wallets/1",
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    wallet_id = wallet_resp.json()["id"]
+    _, wallet_id = await ensure_admin_wallet(client, admin_token)
 
     response = await client.get(
         f"/api/v1/wallets/{wallet_id}/history",

@@ -3,6 +3,7 @@ import hmac
 import json
 import time
 
+import uuid
 import pytest
 
 from app.core.config import settings
@@ -20,11 +21,12 @@ async def test_mvp_lead_to_paid_invoice_updates_dashboard_revenue(client, admin_
 
     monkeypatch.setattr("app.tasks.financials.process_payout_calculation.delay", lambda *args, **kwargs: None)
 
+    uid = uuid.uuid4().hex[:8]
     lead_payload = {
-        "name": "E2E Client",
-        "email": "e2e.client@example.com",
+        "name": f"E2E Client {uid}",
+        "email": f"e2e_{uid}@example.com",
         "phone": "+15550001111",
-        "company": "E2E Co",
+        "company": f"E2E Co {uid}",
         "project_type": "Web App",
         "budget_range": "5000-10000",
         "timeline": "30 days",
@@ -34,6 +36,7 @@ async def test_mvp_lead_to_paid_invoice_updates_dashboard_revenue(client, admin_
     lead_resp = await client.post("/api/v1/leads", json=lead_payload)
     assert lead_resp.status_code == 201
     lead_id = lead_resp.json()["id"]
+
 
     for status in ["contacted", "qualified", "proposal_sent", "won"]:
         up = await client.patch(f"/api/v1/leads/{lead_id}", json={"status": status}, headers=admin_token_headers)
@@ -70,7 +73,7 @@ async def test_mvp_lead_to_paid_invoice_updates_dashboard_revenue(client, admin_
         content=raw,
         headers={
             "x-paystack-signature": signature,
-            "x-paystack-event-id": "evt_mvp_e2e_1",
+            "x-paystack-event-id": f"evt_mvp_e2e_{uid}",
             "x-paystack-timestamp": str(int(time.time())),
         },
     )

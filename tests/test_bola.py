@@ -1,30 +1,47 @@
+import uuid
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
+from app.db.models import User
+
+
+def unique_email(prefix: str = "user") -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:8]}@test.com"
+
+
+async def _register_approve_login(client: AsyncClient, db_session: AsyncSession, prefix: str, full_name: str) -> tuple[int, str]:
+    email = unique_email(prefix)
+    password = "Password123!"
+    await client.post("/api/v1/auth/register", json={
+        "full_name": full_name,
+        "email": email,
+        "password": password,
+    })
+
+    result = await db_session.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+    assert user is not None
+    user.status = "approved"
+    await db_session.commit()
+
+    resp = await client.post("/api/v1/auth/login", data={"username": email, "password": password})
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["access_token"]
+    return user.id, token
+
 
 @pytest.mark.asyncio
-async def test_bola_project_access(client: AsyncClient):
+async def test_bola_project_access(client: AsyncClient, db_session: AsyncSession):
     """Verify that a user cannot access another user's project."""
     
     # 1. Create User A (The Owner)
-    user_a_email = "user_a@test.com"
-    await client.post("/api/v1/auth/register", json={
-        "full_name": "User A",
-        "email": user_a_email,
-        "password": "Password123!",
-    })
-    resp = await client.post("/api/v1/auth/login", data={"username": user_a_email, "password": "Password123!"})
-    token_a = resp.json()["access_token"]
+    user_a_id, token_a = await _register_approve_login(client, db_session, "user_a", "User A")
 
     # 2. Create User B (The Attacker)
-    user_b_email = "user_b@test.com"
-    await client.post("/api/v1/auth/register", json={
-        "full_name": "User B",
-        "email": user_b_email,
-        "password": "Password123!",
-    })
-    resp = await client.post("/api/v1/auth/login", data={"username": user_b_email, "password": "Password123!"})
-    token_b = resp.json()["access_token"]
+    user_b_id, token_b = await _register_approve_login(client, db_session, "user_b", "User B")
 
     # 3. Admin creates a project for User A
     resp = await client.post("/api/v1/auth/login", data={
@@ -32,8 +49,6 @@ async def test_bola_project_access(client: AsyncClient):
         "password": settings.FIRST_SUPERUSER_PASSWORD,
     })
     admin_token = resp.json()["access_token"]
-    
-    user_a_id = (await client.get("/api/v1/auth/profile", headers={"Authorization": f"Bearer {token_a}"})).json()["id"]
 
     project_resp = await client.post(
         "/api/v1/projects/create",
@@ -65,7 +80,7 @@ async def test_bola_project_access(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_bola_task_access(client: AsyncClient):
+async def test_bola_task_access(client: AsyncClient, db_session: AsyncSession):
     """Verify that a user cannot access another user's task."""
     
     # Login as admin
@@ -76,23 +91,10 @@ async def test_bola_task_access(client: AsyncClient):
     admin_token = resp.json()["access_token"]
 
     # Create User C
-    email_c = "user_c@test.com"
-    await client.post("/api/v1/auth/register", json={
-        "full_name": "User C",
-        "email": email_c,
-        "password": "Password123!",
-    })
-    token_c = (await client.post("/api/v1/auth/login", data={"username": email_c, "password": "Password123!"})).json()["access_token"]
-    user_c_id = (await client.get("/api/v1/auth/profile", headers={"Authorization": f"Bearer {token_c}"})).json()["id"]
+    user_c_id, token_c = await _register_approve_login(client, db_session, "user_c", "User C")
 
     # Create User D
-    email_d = "user_d@test.com"
-    await client.post("/api/v1/auth/register", json={
-        "full_name": "User D",
-        "email": email_d,
-        "password": "Password123!",
-    })
-    token_d = (await client.post("/api/v1/auth/login", data={"username": email_d, "password": "Password123!"})).json()["access_token"]
+    user_d_id, token_d = await _register_approve_login(client, db_session, "user_d", "User D")
 
     # Create a project first (required for task)
     proj_resp = await client.post(
@@ -104,6 +106,7 @@ async def test_bola_task_access(client: AsyncClient):
         },
         headers={"Authorization": f"Bearer {admin_token}"}
     )
+    assert proj_resp.status_code == 201
     project_id = proj_resp.json()["id"]
 
     # Admin creates a task assigned to User C
@@ -133,6 +136,7 @@ async def test_bola_task_access(client: AsyncClient):
         headers={"Authorization": f"Bearer {token_c}"}
     )
     assert allowed_resp.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_sensitive_data_leakage(client: AsyncClient):

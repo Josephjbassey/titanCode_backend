@@ -55,6 +55,9 @@ async def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
+from app.db import database as db_database
+db_database.AsyncSessionLocal = TestSessionLocal
+
 
 # ── Async HTTP Client ─────────────────────────────────────────────────
 @pytest_asyncio.fixture

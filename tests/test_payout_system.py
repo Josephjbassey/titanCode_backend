@@ -86,10 +86,14 @@ async def test_api_payout_trigger(client: AsyncClient, db_session: AsyncSession,
     """
     Integration Test: Does updating the project status via API trigger the flow?
     """
+    me_resp = await client.get("/api/v1/auth/profile", headers=admin_token_headers)
+    assert me_resp.status_code == 200
+    admin_id = me_resp.json()["id"]
+
     # 1. Create a new active project via the API.
     payload = {
         "name": "API Payout Project",
-        "client_id": 1,
+        "client_id": admin_id,
         "budget": "2000.00",
         "status": "active",
         "member_ids": []

@@ -11,7 +11,7 @@ async def test_process_successful_payment_success():
     begin_mock = AsyncMock()
     begin_mock.__aenter__ = AsyncMock(return_value=None)
     begin_mock.__aexit__ = AsyncMock(return_value=None)
-    db_session.begin.return_value = begin_mock
+    db_session.begin = MagicMock(return_value=begin_mock)
     
     mock_project = MagicMock(spec=Project)
     mock_project.id = 1
@@ -34,7 +34,7 @@ async def test_process_successful_payment_already_completed():
     begin_mock = AsyncMock()
     begin_mock.__aenter__ = AsyncMock(return_value=None)
     begin_mock.__aexit__ = AsyncMock(return_value=None)
-    db_session.begin.return_value = begin_mock
+    db_session.begin = MagicMock(return_value=begin_mock)
     
     mock_project = MagicMock(spec=Project)
     mock_project.id = 1
@@ -56,7 +56,7 @@ async def test_process_successful_payment_not_found():
     begin_mock = AsyncMock()
     begin_mock.__aenter__ = AsyncMock(return_value=None)
     begin_mock.__aexit__ = AsyncMock(return_value=None)
-    db_session.begin.return_value = begin_mock
+    db_session.begin = MagicMock(return_value=begin_mock)
     
     mock_result = MagicMock()
     mock_result.scalars.return_value.first.return_value = None

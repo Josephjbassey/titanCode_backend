@@ -19,6 +19,8 @@ from app.db.models import (
     Wallet,
     Withdrawal,
 )
+from app.core.config import settings
+
 
 
 def _unique_email(prefix: str) -> str:
@@ -35,6 +37,7 @@ async def _register_and_login(client: AsyncClient, db_session: AsyncSession, rol
 
     user = (await db_session.execute(select(User).where(User.email == email))).scalars().first()
     user.status = "approved"
+    user.role = role
     await db_session.commit()
 
     login = await client.post("/api/v1/auth/login", data={"username": email, "password": password})
@@ -61,9 +64,11 @@ async def test_projects_and_tasks_lists_enforce_scope_and_boundaries(client: Asy
     client_b, headers_b = await _register_and_login(client, db_session, role="Client")
     worker, _ = await _register_and_login(client, db_session)
 
+    created_projects = []
     for idx, owner in enumerate([client_a, client_a, client_b], start=1):
         project = Project(name=f"proj-{idx}", client_id=owner.id, budget=Decimal("100.00"), status="active")
         db_session.add(project)
+        created_projects.append(project)
     await db_session.commit()
 
     projects_for_a = await client.get("/api/v1/projects/?limit=1&offset=0&status=active", headers=headers_a)
@@ -78,9 +83,8 @@ async def test_projects_and_tasks_lists_enforce_scope_and_boundaries(client: Asy
     assert overflow.json()["items"] == []
     assert overflow.json()["next_offset"] is None
 
-    projects = (await db_session.execute(select(Project).order_by(Project.id.asc()))).scalars().all()
-    task_visible = Task(project_id=projects[0].id, assigned_user=worker.id, task_title="visible", status="open")
-    task_hidden = Task(project_id=projects[2].id, assigned_user=worker.id, task_title="hidden", status="open")
+    task_visible = Task(project_id=created_projects[0].id, assigned_user=worker.id, task_title="visible", status="open")
+    task_hidden = Task(project_id=created_projects[2].id, assigned_user=worker.id, task_title="hidden", status="open")
     db_session.add_all([task_visible, task_hidden])
     await db_session.commit()
 
@@ -88,7 +92,7 @@ async def test_projects_and_tasks_lists_enforce_scope_and_boundaries(client: Asy
     assert tasks_for_client_b.status_code == 200
     task_payload = tasks_for_client_b.json()
     assert task_payload["total"] == 1
-    assert task_payload["items"][0]["project_id"] == projects[2].id
+    assert task_payload["items"][0]["project_id"] == created_projects[2].id
 
 
 @pytest.mark.asyncio
@@ -145,8 +149,9 @@ async def test_meetings_and_applications_lists_support_filters_and_scope(client:
 async def test_revenue_and_withdrawals_lists_metadata_and_filters(client: AsyncClient, db_session: AsyncSession, admin_token_headers):
     user, user_headers = await _register_and_login(client, db_session)
 
-    admin = (await db_session.execute(select(User).where(User.email == "admin@titancode.com"))).scalars().first()
-    product = Product(name=f"prod-{os.urandom(2).hex()}", api_key="abc", created_by=admin.id)
+    admin = (await db_session.execute(select(User).where((User.email == "admin@titancode.com") | (User.email == settings.FIRST_SUPERUSER)))).scalars().first()
+    admin_id = admin.id if admin else user.id
+    product = Product(name=f"prod-{os.urandom(4).hex()}", api_key=f"key_{os.urandom(4).hex()}", created_by=admin_id)
     db_session.add(product)
     await db_session.flush()
 
@@ -183,7 +188,7 @@ async def test_revenue_and_withdrawals_lists_metadata_and_filters(client: AsyncC
     assert my_withdrawals.json()["total"] == 1
 
     withdrawals_overflow = await client.get(
-        "/api/v1/financials/withdrawals?limit=1&offset=20",
+        f"/api/v1/financials/withdrawals?user_id={user.id}&limit=1&offset=20",
         headers=admin_token_headers,
     )
     assert withdrawals_overflow.status_code == 200
