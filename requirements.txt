@@ -26,6 +26,7 @@ pyjwt>=2.8.0                       # Create and verify JSON Web Tokens (JWT)
 reportlab>=4.1.0                   # PDF invoice generation
 passlib[bcrypt]>=1.7.4             # Password hashing with bcrypt algorithm
 bcrypt==4.0.1                      # Pinned for compatibility with passlib (v4.1+ breaks it)
+google-auth>=2.29.0                # Verify Google OAuth2 ID tokens server-side
 
 # ── Utilities ──────────────────────────────────────────────────────────
 python-multipart>=0.0.9            # Parse form data (required for OAuth2 login form)

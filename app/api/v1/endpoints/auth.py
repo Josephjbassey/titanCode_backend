@@ -348,6 +348,13 @@ async def login(
         )
 
     if not user or not password_matches:
+        # If the user exists but signed up via Google (no password), give a helpful message
+        if user and not user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="This account uses Google Sign-In. Please use the Google button to log in.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -357,6 +364,93 @@ async def login(
     _ensure_user_is_approved(user)
 
     # Generate both tokens
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+    return {
+        "access_token": security.create_access_token(user.id, expires_delta=access_token_expires),
+        "refresh_token": security.create_refresh_token(user.id, expires_delta=refresh_token_expires),
+        "token_type": "bearer",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Google OAuth — Sign in or register with Google
+# ═══════════════════════════════════════════════════════════════════════
+class GoogleAuthRequest(BaseModel):
+    credential: str  # The Google ID token from the frontend
+
+@router.post("/google", response_model=Token)
+@limiter.limit("10/minute")
+async def google_auth(
+    request: Request,
+    body: GoogleAuthRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Authenticate (or register) a user via Google OAuth.
+
+    The frontend sends a Google ID token (from Google Sign-In SDK).
+    The backend verifies it with Google's public keys and either:
+      1. Logs in the existing user with that email, or
+      2. Creates a new user account with status="pending".
+
+    Returns:
+        access_token + refresh_token (same as /login).
+    """
+    from google.oauth2 import id_token as google_id_token
+    from google.auth.transport import requests as google_requests
+
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured on this server.",
+        )
+
+    # Verify the Google ID token
+    try:
+        idinfo = google_id_token.verify_oauth2_token(
+            body.credential,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Google credential.",
+        )
+
+    google_email = idinfo.get("email")
+    google_name = idinfo.get("name", "Google User")
+
+    if not google_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account does not have an email address.",
+        )
+
+    # Look up existing user by email
+    stmt = select(User).where(User.email == google_email)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    if not user:
+        # Auto-create a new user from Google profile
+        user = User(
+            email=google_email,
+            full_name=google_name,
+            password_hash=None,
+            auth_provider="google",
+            role=UserRole.MEMBER.value,
+            status=ApprovalStatus.PENDING.value,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    _ensure_user_is_approved(user)
+
+    # Issue JWT tokens
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 

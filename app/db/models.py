@@ -97,7 +97,8 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)   # Never store plain text!
+    password_hash = Column(String(255), nullable=True)      # Null for OAuth-only accounts
+    auth_provider = Column(String(50), default="local", nullable=False)  # "local", "google"
     country = Column(String(100), nullable=True)
     phone_number = Column(String(50), nullable=True)
     github_url = Column(String(255), nullable=True)

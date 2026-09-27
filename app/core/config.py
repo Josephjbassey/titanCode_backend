@@ -49,9 +49,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15    # Short-lived access tokens
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7       # Longer-lived refresh tokens
 
-    # ── CORS ────────────────────────────────────────────────────────────
+    # ── Frontend & CORS ────────────────────────────────────────────────
+    FRONTEND_URL: str = "http://localhost:3000"
     # Stored as comma-separated or JSON array in .env
-    BACKEND_CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8000"
+    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:8000,http://127.0.0.1:3000,http://127.0.0.1:5173"
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -114,6 +115,9 @@ class Settings(BaseSettings):
     PAYSTACK_SECRET_KEY: Optional[str] = None
     FLUTTERWAVE_SECRET_KEY: Optional[str] = None
     FLUTTERWAVE_WEBHOOK_SECRET: Optional[str] = None
+
+    # ── Google OAuth ────────────────────────────────────────────────────
+    GOOGLE_CLIENT_ID: Optional[str] = None
 
     # ── Observability ─────────────────────────────────────────────────────
     SENTRY_DSN: Optional[str] = None
