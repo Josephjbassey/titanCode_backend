@@ -130,18 +130,6 @@ app = FastAPI(
     lifespan=lifespan,                                   # Attach startup/shutdown logic
 )
 
-# ── CORS Middleware ─────────────────────────────────────────────────────
-# Cross-Origin Resource Sharing: allows the frontend (e.g. React on
-# localhost:3000) to make requests to this backend (localhost:8000).
-if settings.cors_origins_list:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
-        allow_credentials=True,   # Allow cookies / auth headers
-        allow_methods=["*"],      # Allow all HTTP methods (GET, POST, PUT, DELETE)
-        allow_headers=["*"],      # Allow all headers
-    )
-
 # ── Rate Limiting Middleware ────────────────────────────────────────────
 # SlowAPI protects against brute-force and abuse.
 # Default: 60 requests/minute per IP. Auth endpoints get stricter limits.
@@ -153,6 +141,18 @@ app.add_middleware(SlowAPIMiddleware)
 # Logs every HTTP request with timing, status code, and client IP.
 # Also adds X-Process-Time header to responses.
 app.add_middleware(RequestLoggingMiddleware)
+
+# ── CORS Middleware (Outermost) ─────────────────────────────────────────
+# Cross-Origin Resource Sharing: allows frontend origins to make requests.
+# Placed outermost so preflight OPTIONS requests are handled immediately.
+if settings.cors_origins_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,   # Allow cookies / auth headers
+        allow_methods=["*"],      # Allow all HTTP methods (GET, POST, PUT, DELETE, OPTIONS)
+        allow_headers=["*"],      # Allow all headers
+    )
 
 # ── Register API Routers ───────────────────────────────────────────────
 # Each router handles a group of related endpoints.

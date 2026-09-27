@@ -24,7 +24,7 @@ class ProductBase(BaseModel):
         product_url:      The main public URL of the product.
     """
     name: str = Field(..., example="TitanCRM")
-    product_type: str = Field(..., example="SaaS")
+    product_type: Optional[str] = Field(default="SaaS", example="SaaS")
     revenue_endpoint: Optional[HttpUrl] = None
     product_url: Optional[HttpUrl] = None
 

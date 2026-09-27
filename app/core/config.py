@@ -50,13 +50,44 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7       # Longer-lived refresh tokens
 
     # ── CORS ────────────────────────────────────────────────────────────
-    # Stored as a comma-separated string in .env (e.g. "http://localhost:3000,http://localhost:8000")
-    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+    # Stored as comma-separated or JSON array in .env
+    BACKEND_CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8000"
 
     @property
     def cors_origins_list(self) -> list[str]:
-        """Split the comma-separated CORS string into a list of origins."""
-        return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]
+        """Parse CORS origins whether stored as a JSON array or comma-separated string."""
+        raw = self.BACKEND_CORS_ORIGINS
+        origins: list[str] = []
+        if isinstance(raw, str):
+            raw_str = raw.strip()
+            if raw_str.startswith("[") and raw_str.endswith("]"):
+                try:
+                    import json
+                    parsed = json.loads(raw_str)
+                    if isinstance(parsed, list):
+                        origins = [str(o).strip() for o in parsed if str(o).strip()]
+                except Exception:
+                    pass
+            if not origins:
+                origins = [origin.strip() for origin in raw_str.split(",") if origin.strip()]
+        elif isinstance(raw, list):
+            origins = [str(o).strip() for o in raw if str(o).strip()]
+
+        # Ensure local development origins are always included in development
+        if self.ENVIRONMENT == "development":
+            defaults = [
+                "http://localhost:5173",
+                "http://localhost:3000",
+                "http://localhost:8000",
+                "http://127.0.0.1:5173",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:8000",
+                "http://localhost:4173",
+            ]
+            for d in defaults:
+                if d not in origins:
+                    origins.append(d)
+        return origins
 
     # ── Database ────────────────────────────────────────────────────────
     DATABASE_URL: str                        # Required — loaded from .env

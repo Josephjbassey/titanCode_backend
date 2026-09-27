@@ -99,7 +99,7 @@ async def list_products(
         ProductPublic(
             id=product.id,
             name=product.name,
-            product_type=product.product_type,
+            product_type=product.product_type or "SaaS",
             revenue_endpoint=product.revenue_endpoint,
             product_url=product.product_url,
             api_key_id=product.api_key_id,
@@ -136,7 +136,7 @@ async def get_product(
     return ProductPublic(
         id=product.id,
         name=product.name,
-        product_type=product.product_type,
+        product_type=product.product_type or "SaaS",
         revenue_endpoint=product.revenue_endpoint,
         product_url=product.product_url,
         api_key_id=product.api_key_id,
