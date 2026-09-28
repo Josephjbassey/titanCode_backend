@@ -22,7 +22,7 @@ API Routes (all prefixed with /api/v1/applications):
     PUT  /reject   — Reject a pending application
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr
@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import func
 
 from app.core import security
+from app.core.config import settings
 from app.db.database import get_db
 from app.db.models import Application, User, Department
 from app.schemas.application import (
@@ -364,6 +365,7 @@ class PublicApplicationCreate(BaseModel):
     portfolio_url: str | None = None
     portfolio: str | None = None
     about: str | None = None
+    password: str | None = None
 
 
 @router.post("/public-apply", status_code=status.HTTP_201_CREATED)
@@ -431,12 +433,12 @@ async def public_application(
                 detail="You already have a pending application. Our team is currently reviewing your profile.",
             )
     else:
-        # Create shadow/pending applicant user
-        temp_password = secrets.token_urlsafe(16)
+        # Create applicant user with provided password or generated fallback
+        chosen_password = payload.password if payload.password and len(payload.password) >= 6 else secrets.token_urlsafe(16)
         user = User(
             full_name=full_name,
             email=payload.email,
-            password_hash=security.get_password_hash(temp_password),
+            password_hash=security.get_password_hash(chosen_password),
             role="Applicant",
             status="pending",
             country=payload.country or "Nigeria",
@@ -491,9 +493,27 @@ async def public_application(
         },
     )
 
+    # 6. Issue candidate session tokens for direct dashboard tracking
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    access_token = security.create_access_token(user.id, expires_delta=access_token_expires)
+    refresh_token = security.create_refresh_token(user.id, expires_delta=refresh_token_expires)
+
     return {
         "success": True,
-        "message": "Application submitted successfully! Our team will review your portfolio.",
+        "message": "Application submitted successfully! Welcome to your candidate portal.",
         "application_id": application.id,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": {
+            "id": user.id,
+            "full_name": user.full_name,
+            "email": user.email,
+            "role": user.role,
+            "status": user.status,
+            "department_id": user.department_id,
+            "department_name": dept.name,
+        },
     }
+
 

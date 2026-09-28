@@ -48,10 +48,15 @@ async def send_email(
 
     # ── Asynchronous SMTP Delivery ──────────────────────────────────────
     try:
+        port = settings.SMTP_PORT or 587
+        use_ssl = (port == 465)
+        use_starttls = (port == 587) or (settings.SMTP_TLS and not use_ssl and port != 1025)
+
         smtp_options = {
             "hostname": settings.SMTP_HOST,
-            "port": settings.SMTP_PORT,
-            "use_tls": settings.SMTP_TLS,
+            "port": port,
+            "use_tls": use_ssl,
+            "start_tls": use_starttls,
         }
         
         # Start connection

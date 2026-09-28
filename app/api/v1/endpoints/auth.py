@@ -136,7 +136,16 @@ def _raise_unapproved_account(status_value: str | None) -> None:
 
 
 def _ensure_user_is_approved(user: User) -> None:
-    """Ensure only approved users can authenticate or access protected routes."""
+    """
+    Ensure only authorized users can authenticate or access protected routes.
+    - Clients are authorized upon onboarding/registration.
+    - Applicants are authorized to log in to view their candidate status.
+    - Internal staff and members require administrator approval.
+    """
+    role = (user.role or "").strip().capitalize()
+    if role in ["Client", "Applicant"]:
+        return
+
     if (user.status or "").lower() != ApprovalStatus.APPROVED.value:
         _raise_unapproved_account(user.status)
 
@@ -276,40 +285,107 @@ async def register(request: Request, user_in: UserCreate, db: AsyncSession = Dep
         )
 
     # Create new user with hashed password
+    requested_role = (user_in.role or "Member").strip().capitalize()
+    if requested_role not in ["Client", "Applicant", "Member"]:
+        requested_role = UserRole.MEMBER.value
+
+    is_client = requested_role == "Client"
+    user_status = ApprovalStatus.APPROVED.value if is_client else ApprovalStatus.PENDING.value
+
     user = User(
         email=user_in.email,
         full_name=user_in.full_name,
         password_hash=await run_in_threadpool(security.get_password_hash, user_in.password),
         country=user_in.country,
         phone_number=user_in.phone_number,
-        role=UserRole.MEMBER.value,
-        status=ApprovalStatus.PENDING.value,
+        role=requested_role,
+        status=user_status,
+        onboarded=True if is_client else False,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)  # Refresh to populate auto-generated fields (id, created_at)
 
-    # Send welcome email — informs the new member their account is pending review
-    await send_email(
-        recipient_email=user.email,
-        subject="Welcome to TitanCode Technologies! Your application is under review.",
-        body=(
-            f"Hi {user.full_name},\n\n"
-            f"Thank you for registering with TitanCode Technologies!\n\n"
-            f"Your account has been created and is currently pending review by our team. "
-            f"You will receive a notification once your application has been approved.\n\n"
-            f"— The TitanCode Team"
-        ),
-        html_content=(
-            f"<p>Hi <strong>{user.full_name}</strong>,</p>"
-            f"<p>Thank you for registering with <strong>TitanCode Technologies</strong>!</p>"
-            f"<p>Your account has been created and is currently <strong>pending review</strong> "
-            f"by our team. You will receive a notification once your application has been approved.</p>"
-            f"<br><p>— The TitanCode Team</p>"
-        ),
-    )
+    # Send welcome email based on role
+    if is_client:
+        await send_email(
+            recipient_email=user.email,
+            subject="Welcome to TitanCode Technologies — Your Client Portal is Active",
+            body=(
+                f"Hi {user.full_name},\n\n"
+                f"Welcome to TitanCode Technologies!\n\n"
+                f"Your client portal is now active. You can track project milestones, "
+                f"communicate with our tech leads, and manage escrow funding directly from your dashboard.\n\n"
+                f"— The TitanCode Team"
+            ),
+            html_content=(
+                f"<p>Hi <strong>{user.full_name}</strong>,</p>"
+                f"<p>Welcome to <strong>TitanCode Technologies</strong>!</p>"
+                f"<p>Your client portal is now active. You can track project milestones, "
+                f"communicate with our tech leads, and manage escrow funding directly from your dashboard.</p>"
+                f"<br><p>— The TitanCode Team</p>"
+            ),
+        )
+    else:
+        await send_email(
+            recipient_email=user.email,
+            subject="Welcome to TitanCode Technologies! Your application is under review.",
+            body=(
+                f"Hi {user.full_name},\n\n"
+                f"Thank you for registering with TitanCode Technologies!\n\n"
+                f"Your account has been created and is currently pending review by our team. "
+                f"You will receive a notification once your application has been approved.\n\n"
+                f"— The TitanCode Team"
+            ),
+            html_content=(
+                f"<p>Hi <strong>{user.full_name}</strong>,</p>"
+                f"<p>Thank you for registering with <strong>TitanCode Technologies</strong>!</p>"
+                f"<p>Your account has been created and is currently <strong>pending review</strong> "
+                f"by our team. You will receive a notification once your application has been approved.</p>"
+                f"<br><p>— The TitanCode Team</p>"
+            ),
+        )
 
     return user
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ENDPOINT: Qualify Role (Onboarding step 2)
+# ═══════════════════════════════════════════════════════════════════════
+class QualifyRoleBody(BaseModel):
+    role: str  # "Client" | "Member" | "Applicant"
+
+@router.post("/qualify", response_model=UserPrivate)
+async def qualify_user_role(
+    body: QualifyRoleBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Allow a newly registered user to select their role during the
+    onboarding qualification step (Figma Qualification View).
+
+    - Choosing 'Client' immediately approves the account and marks onboarded=True.
+    - Choosing 'Member' or 'Applicant' preserves the pending review workflow.
+    """
+    selected_role = body.role.strip().capitalize()
+    if selected_role not in ["Client", "Member", "Applicant"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role must be Client, Member, or Applicant.",
+        )
+
+    current_user.role = selected_role
+    if selected_role == "Client":
+        current_user.status = ApprovalStatus.APPROVED.value
+        current_user.onboarded = True
+    else:
+        current_user.status = ApprovalStatus.PENDING.value
+
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
