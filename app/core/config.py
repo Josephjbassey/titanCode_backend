@@ -97,17 +97,36 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def assemble_async_db_url(cls, v: str) -> str:
-        """Ensure the connection string uses the asyncpg driver required by SQLAlchemy 2.0 async engine."""
+        """Ensure the connection string uses the asyncpg driver and clean parameters for asyncpg."""
         if isinstance(v, str):
+            v = v.strip().strip("'\"")
             if v.startswith("postgres://"):
                 v = v.replace("postgres://", "postgresql+asyncpg://", 1)
             elif v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
                 v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
-            if "sslmode=" in v:
-                v = v.replace("sslmode=", "ssl=")
+            
+            # Normalize query parameters for asyncpg (asyncpg rejects sslmode and channel_binding)
+            if "?" in v:
+                base, query = v.split("?", 1)
+                import urllib.parse
+                params = urllib.parse.parse_qsl(query)
+                clean_params = []
+                has_ssl = False
+                for k, val in params:
+                    if k in ("sslmode", "ssl"):
+                        clean_params.append(("ssl", val))
+                        has_ssl = True
+                    elif k == "channel_binding":
+                        continue  # asyncpg does not support channel_binding
+                    else:
+                        clean_params.append((k, val))
+                if not has_ssl and ("neon.tech" in base or "supabase" in base):
+                    clean_params.append(("ssl", "require"))
+                v = f"{base}?{urllib.parse.urlencode(clean_params)}"
         return v
 
-    # ── AWS S3 Storage (Optional) ──────────────────────────────────────
+    # ── AWS S3 / Object Storage (Optional) ─────────────────────────────
+    AWS_ENDPOINT_URL_S3: Optional[str] = None
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     S3_BUCKET: Optional[str] = None

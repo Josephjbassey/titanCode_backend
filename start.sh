@@ -11,7 +11,7 @@ alembic upgrade head
 
 # Step 2: Start the Celery Worker in the background
 echo "--> [2/3] Starting background Celery worker..."
-celery -A app.core.celery_app worker --loglevel=info -Q default,notifications,dead_letter --concurrency=2 &
+celery -A app.core.celery_app worker --loglevel=info -Q default,notifications,dead_letter --concurrency=${CELERY_CONCURRENCY:-1} &
 CELERY_PID=$!
 echo "--> Celery worker started with PID $CELERY_PID"
 
@@ -25,4 +25,4 @@ trap cleanup SIGTERM SIGINT EXIT
 
 # Step 3: Start Gunicorn + Uvicorn in the foreground
 echo "--> [3/3] Starting Gunicorn server on port ${PORT:-8000}..."
-exec gunicorn main:app -w ${WEB_CONCURRENCY:-2} -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000}
+exec gunicorn main:app -w ${WEB_CONCURRENCY:-1} -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000}

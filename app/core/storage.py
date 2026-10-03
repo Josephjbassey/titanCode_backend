@@ -262,14 +262,16 @@ class S3Storage(BaseStorage):
 
     def __init__(self):
         import boto3
-        from app.core.config import settings
+        client_kwargs = {
+            "service_name": "s3",
+            "aws_access_key_id": settings.AWS_ACCESS_KEY_ID,
+            "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY,
+            "region_name": settings.S3_REGION,
+        }
+        if settings.AWS_ENDPOINT_URL_S3:
+            client_kwargs["endpoint_url"] = settings.AWS_ENDPOINT_URL_S3
 
-        self.s3 = boto3.client(
-            "s3",
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name=settings.S3_REGION,
-        )
+        self.s3 = boto3.client(**client_kwargs)
         self.bucket = settings.S3_BUCKET
 
     async def save(
