@@ -43,10 +43,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Step 6: Copy the rest of the application code
 COPY . .
+RUN chmod +x ./start.sh
 
-# Step 7: Start the FastAPI server with Gunicorn (Production)
-# We use Gunicorn as a process manager to run multiple Uvicorn workers.
-# -w 4         → Run 4 worker processes (adjust based on CPU cores)
-# -k uvicorn.workers.UvicornWorker → Use the Uvicorn worker class
-# --bind 0.0.0.0:8000 → Listen on all interfaces
-CMD ["sh", "-c", "alembic upgrade head && gunicorn main:app -w ${WEB_CONCURRENCY:-2} -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000}"]
+# Step 7: Launch migrations, Celery worker, and FastAPI server
+CMD ["./start.sh"]

@@ -1,5 +1,11 @@
 services:
-  # ── TitanCode FastAPI Backend Web Service ──────────────────────────────
+  # ═════════════════════════════════════════════════════════════════════════
+  # TitanCode FastAPI Backend Web Service + In-Container Celery Worker
+  # ═════════════════════════════════════════════════════════════════════════
+  # Runs Alembic migrations, the Celery background worker, and Gunicorn/Uvicorn
+  # in a single container on Render's $7/month Starter plan.
+  # Database is hosted on Neon (Free forever) and Redis on Upstash (Free forever).
+  # ═════════════════════════════════════════════════════════════════════════
   - type: web
     name: titancode-backend
     runtime: docker
@@ -15,36 +21,16 @@ services:
       - key: FIRST_SUPERUSER
         value: admin@titancode.com
       - key: FIRST_SUPERUSER_PASSWORD
-        sync: false # Set a strong, non-default password in Render dashboard
+        sync: false # Set in Render dashboard (e.g. YourSecurePassword2026!)
       - key: SECRET_KEY
-        generateValue: true
+        generateValue: true # Render automatically generates a 256-bit secure key
       - key: DATABASE_URL
-        fromDatabase:
-          name: titancode-db
-          property: connectionString
+        sync: false # Paste your Neon PostgreSQL connection string (with ?sslmode=require)
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: titancode-redis
-          property: connectionString
+        sync: false # Paste your Upstash Redis connection string (rediss://...)
       - key: BACKEND_CORS_ORIGINS
-        sync: false # Set to your Vercel frontend URL (e.g. https://your-app.vercel.app)
+        sync: false # Paste your Vercel frontend URL (e.g. https://your-app.vercel.app,http://localhost:5173)
       - key: WEB_CONCURRENCY
         value: "2"
       - key: PORT
         value: "8000"
-
-  # ── Redis Key-Value for PubSub & Caching ────────────────────────────────
-  - type: redis
-    name: titancode-redis
-    plan: starter
-    region: oregon
-    maxmemoryPolicy: allkeys-lru
-
-databases:
-  # ── PostgreSQL Managed Database ─────────────────────────────────────────
-  - name: titancode-db
-    plan: starter
-    region: oregon
-    databaseName: titancode
-    user: postgres

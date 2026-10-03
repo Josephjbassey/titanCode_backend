@@ -100,9 +100,11 @@ class Settings(BaseSettings):
         """Ensure the connection string uses the asyncpg driver required by SQLAlchemy 2.0 async engine."""
         if isinstance(v, str):
             if v.startswith("postgres://"):
-                return v.replace("postgres://", "postgresql+asyncpg://", 1)
-            if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
-                return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+                v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+                v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+            if "sslmode=" in v:
+                v = v.replace("sslmode=", "ssl=")
         return v
 
     # ── AWS S3 Storage (Optional) ──────────────────────────────────────
