@@ -175,8 +175,8 @@ class Settings(BaseSettings):
 
     @property
     def is_dev_environment(self) -> bool:
-        """Return True for local/dev/test environments where bootstrap defaults are allowed."""
-        return self.ENVIRONMENT.lower() in {"dev", "development", "local", "test", "testing"}
+        """Return True for local/dev/test/staging environments where bootstrap defaults are allowed."""
+        return self.ENVIRONMENT.lower() in {"dev", "development", "local", "test", "testing", "staging"}
 
     @model_validator(mode="after")
     def validate_secure_bootstrap_defaults(self):
