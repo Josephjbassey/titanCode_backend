@@ -11,7 +11,7 @@ Usage:
 """
 
 from typing import Optional
-from pydantic import EmailStr, model_validator
+from pydantic import EmailStr, model_validator, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -93,6 +93,17 @@ class Settings(BaseSettings):
     # ── Database ────────────────────────────────────────────────────────
     DATABASE_URL: str                        # Required — loaded from .env
     REDIS_URL: str = "redis://redis:6379/0"  # Default for Docker
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_async_db_url(cls, v: str) -> str:
+        """Ensure the connection string uses the asyncpg driver required by SQLAlchemy 2.0 async engine."""
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+asyncpg://", 1)
+            if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+                return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # ── AWS S3 Storage (Optional) ──────────────────────────────────────
     AWS_ACCESS_KEY_ID: Optional[str] = None
