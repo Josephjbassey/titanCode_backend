@@ -142,11 +142,18 @@ class Settings(BaseSettings):
     EMAILS_FROM_EMAIL: Optional[str] = "info@titancode.com"
     EMAILS_FROM_NAME: Optional[str] = "TitanCode Technologies"
     
-    # ── Payment Gateways (Africa) ───────────────────────────────────────
-    # These are loaded from your .env file.
+    # ── Payment Gateways (Paystack Transfers, Flutterwave & Stripe) ─────
     PAYSTACK_SECRET_KEY: Optional[str] = None
+    PAYSTACK_PUBLIC_KEY: Optional[str] = None
     FLUTTERWAVE_SECRET_KEY: Optional[str] = None
     FLUTTERWAVE_WEBHOOK_SECRET: Optional[str] = None
+    STRIPE_SECRET_KEY: Optional[str] = None
+    STRIPE_WEBHOOK_SECRET: Optional[str] = None
+
+    # ── Sumsub KYC (Identity Verification) ──────────────────────────────
+    SUMSUB_SECRET_KEY: Optional[str] = None
+    SUMSUB_APP_TOKEN: Optional[str] = None
+    SUMSUB_WEBHOOK_SECRET: Optional[str] = None
 
     # ── Google OAuth ────────────────────────────────────────────────────
     GOOGLE_CLIENT_ID: Optional[str] = None

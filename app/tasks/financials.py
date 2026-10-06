@@ -137,12 +137,19 @@ async def _process_payout_calculation_async(
                     
                 members = project.members
                 
-                # 3. PROFIT SPLIT CALCULATION: (70% to Team, 30% to Company)
-                # We use 'Decimal' instead of 'float' because floats are imprecise for money (e.g., 0.1 + 0.2 != 0.3).
-                total_member_payout = project.budget * Decimal("0.70")
+                # 3. PROFIT SPLIT CALCULATION: Dynamic Split (3-Tier or 70/30)
+                from app.api.v1.endpoints.financials import _get_active_settings
+                active_settings = await _get_active_settings()
+                
+                m_pct = Decimal(str(active_settings.get("member_split_percent", 60.0))) / Decimal("100.0")
+                o_pct = Decimal(str(active_settings.get("overhead_split_percent", 15.0))) / Decimal("100.0")
+
+                total_member_payout = (project.budget * m_pct).quantize(Decimal("0.01"))
+                total_overhead_payout = (project.budget * o_pct).quantize(Decimal("0.01"))
+                company_share = project.budget - total_member_payout - total_overhead_payout
                 
                 if not members:
-                    # If no members, the full 70% share is kept by the company as backup.
+                    # If no members, the full squad share is kept by the company as backup.
                     per_member_payout = Decimal("0.00")
                 else:
                     # Divide the team's share equally among all members.
@@ -178,9 +185,10 @@ async def _process_payout_calculation_async(
                     await session.flush()
                     await ensure_transaction_recorded(session, wallet_id=wallet.id, reference_id=transaction.reference_id)
 
-                # 5. COMPANY SHARE: The remaining 30% goes to the Company Treasury.
-                company_share = project.budget - total_member_payout
-                if company_share > 0:
+                # 5. COMPANY SHARE & OVERHEAD POOL:
+                # Retains Company Treasury share and Overhead pool in CompanyWallet
+                company_total_payout = company_share + total_overhead_payout
+                if company_total_payout > 0:
                     from app.db.models import CompanyWallet
                     stmt = select(CompanyWallet).with_for_update()
                     res = await session.execute(stmt)
@@ -191,8 +199,10 @@ async def _process_payout_calculation_async(
                         session.add(company_wallet)
                         await session.flush()
                     
-                    company_wallet.balance += company_share
-                    logger.info(f"Financial Engine: Credited ${company_share} to Company Treasury for Project {project_id}")
+                    company_wallet.balance += company_total_payout
+                    logger.info(
+                        f"Financial Engine: Credited Treasury=${company_share}, Non-Billable Overhead=${total_overhead_payout} to Company Treasury for Project {project_id}"
+                    )
 
                     # Backward compatibility: sync client/owner personal wallet if present
                     if project.client_id:
@@ -200,14 +210,34 @@ async def _process_payout_calculation_async(
                         res_cw = await session.execute(stmt_cw)
                         client_wallet = res_cw.scalars().first()
                         if client_wallet:
-                            client_wallet.balance += company_share
+                            client_wallet.balance += company_total_payout
+
+                # Audit Log of the split breakdown
+                from app.db.models import AuditLog
+                session.add(
+                    AuditLog(
+                        actor_type="system",
+                        actor_id=None,
+                        action="payout_split_calculated",
+                        target_type="project",
+                        target_id=project_id,
+                        details={
+                            "total_budget": str(project.budget),
+                            "squad_share": str(total_member_payout),
+                            "overhead_share": str(total_overhead_payout),
+                            "treasury_share": str(company_share),
+                            "member_count": len(members),
+                            "split_model": active_settings.get("split_model", "three_tier_60_15_25"),
+                        },
+                    )
+                )
 
                 # 6. INVOICE GENERATION: Create a final document summarizes the whole payout.
                 session.add(PayoutInvoice(
                     project_id=project.id,
                     total_payout_amount=project.budget,
                     team_payout_amount=total_member_payout,
-                    company_payout_amount=company_share,
+                    company_payout_amount=company_total_payout,
                     is_approved=False
                 ))
             

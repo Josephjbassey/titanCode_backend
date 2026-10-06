@@ -6,6 +6,9 @@ It implements a secure withdrawal workflow with status tracking.
 """
 
 import json
+import uuid
+import logging
+import httpx
 from decimal import Decimal
 from contextlib import nullcontext
 from typing import Any, List
@@ -17,7 +20,7 @@ from sqlalchemy.future import select
 
 from app.core.config import settings
 from app.db.database import get_db
-from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, Project, utcnow
+from app.db.models import CompanyWallet, Withdrawal, User, Wallet, PayoutInvoice, Transaction, Project, AuditLog, utcnow
 from app.schemas.financials import (
     CompanyWallet as WalletSchema, 
     Withdrawal as WithdrawalSchema, 
@@ -31,6 +34,8 @@ from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 from app.core.rate_limiter import limiter
 from starlette.requests import Request
 from sqlalchemy import func
+
+logger = logging.getLogger(__name__)
 
 # Backward-compatibility alias for test patchers
 send_email = enqueue_email_task
@@ -238,24 +243,48 @@ async def process_withdrawal(
         raise HTTPException(status_code=404, detail="Withdrawal request not found")
 
     current_status = withdrawal.status
-    target_status = action.status
+    target_status = action.status or (
+        {"approve": "approved", "reject": "rejected", "pay": "paid"}.get(action.action, action.action)
+        if action.action else None
+    )
+    if not target_status:
+        raise HTTPException(status_code=400, detail="Missing withdrawal action or status")
 
     if target_status == "paid":
-        if not action.idempotency_key:
-            raise HTTPException(
-                status_code=400,
-                detail="idempotency_key is required when status is paid",
-            )
+        payout_key = action.idempotency_key or f"paystack:transfer:{withdrawal.id}:{uuid.uuid4().hex[:12]}"
         if (
             withdrawal.external_payout_idempotency_key
-            and withdrawal.external_payout_idempotency_key != action.idempotency_key
+            and withdrawal.external_payout_idempotency_key != payout_key
         ):
             raise HTTPException(
                 status_code=409,
                 detail="Withdrawal already has a different external payout idempotency key",
             )
         if not withdrawal.external_payout_idempotency_key:
-            withdrawal.external_payout_idempotency_key = action.idempotency_key
+            withdrawal.external_payout_idempotency_key = payout_key
+
+        # Connect Paystack Transfers API when configured
+        if settings.PAYSTACK_SECRET_KEY and not settings.PAYSTACK_SECRET_KEY.startswith("sk_live_placeholder"):
+            try:
+                amount_kobo = int(Decimal(str(withdrawal.amount)) * 100)
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    paystack_res = await client.post(
+                        "https://api.paystack.co/transfer",
+                        headers={
+                            "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "source": "balance",
+                            "amount": amount_kobo,
+                            "recipient": withdrawal.bank_info or "RCP_corporate_withdrawal",
+                            "reason": f"TitanCode payout #{withdrawal.id}",
+                            "reference": withdrawal.external_payout_idempotency_key,
+                        },
+                    )
+                    logger.info("Paystack transfer initiated", extra={"status": paystack_res.status_code, "withdrawal_id": withdrawal.id})
+            except Exception as exc:
+                logger.warning("Paystack transfer request error", extra={"error": str(exc), "withdrawal_id": withdrawal.id})
 
     # Idempotent replay: avoid repeated side effects (refunds/notifications/email).
     if target_status == current_status:
@@ -289,6 +318,22 @@ async def process_withdrawal(
     withdrawal.status = target_status
     withdrawal.reviewed_by = current_user.id
     
+    # Audit log entry for tracking
+    db.add(
+        AuditLog(
+            actor_type="admin",
+            actor_id=current_user.id,
+            action=f"withdrawal_{target_status}",
+            target_type="withdrawal",
+            target_id=withdrawal.id,
+            details={
+                "amount": str(withdrawal.amount),
+                "idempotency_key": withdrawal.external_payout_idempotency_key,
+                "provider": "paystack",
+            },
+        )
+    )
+
     await db.commit()
     await db.refresh(withdrawal)
 
@@ -395,36 +440,61 @@ async def approve_payout(
 # SYSTEM SETTINGS & SALARY PROFIT SPLIT LOGIC
 # ═══════════════════════════════════════════════════════════════════════
 
+class PricingTierModel(BaseModel):
+    id: str
+    label: str
+    min_amount: float
+    max_amount: float | None = None
+    description: str = ""
+    is_active: bool = True
+
+
 class FinancialSettingsModel(BaseModel):
     company_name: str = "TitanCode Technologies Inc."
     support_email: str = "support@titancode.agency"
     currency: str = "USD"
     timezone: str = "UTC"
-    platform_split_percent: float = 30.0
-    member_split_percent: float = 70.0
+    split_model: str = "three_tier_60_15_25"  # "standard_70_30" | "three_tier_60_15_25" | "custom"
+    platform_split_percent: float = 25.0
+    overhead_split_percent: float = 15.0
+    member_split_percent: float = 60.0
     notify_on_milestone: bool = True
     notify_on_withdrawal: bool = True
+    pricing_tiers: List[PricingTierModel] = []
 
 
 class SalaryProjectionResponse(BaseModel):
     total_budget: float
+    split_model: str = "three_tier_60_15_25"
     platform_split_percent: float
+    overhead_split_percent: float = 15.0
     member_split_percent: float
     platform_treasury_share: float
+    overhead_pool_share: float = 0.0
     team_pool_share: float
     member_count: int
     projected_salary_per_member: float
 
+
+_DEFAULT_PRICING_TIERS = [
+    {"id": "tier-1", "label": "Starter", "min_amount": 10000, "max_amount": 20000, "description": "Rapid MVP — Core features, 1-2 month delivery", "is_active": True},
+    {"id": "tier-2", "label": "Standard", "min_amount": 20000, "max_amount": 40000, "description": "Full product — API integrations, admin panel, 2-3 month delivery", "is_active": True},
+    {"id": "tier-3", "label": "Professional", "min_amount": 40000, "max_amount": 75000, "description": "Scale-ready — Multi-tenant, advanced analytics, 3-6 month delivery", "is_active": True},
+    {"id": "tier-4", "label": "Enterprise", "min_amount": 75000, "max_amount": None, "description": "Custom — Dedicated team, SLA, compliance, ongoing support", "is_active": True},
+]
 
 _DEFAULT_SETTINGS = {
     "company_name": "TitanCode Technologies Inc.",
     "support_email": "support@titancode.agency",
     "currency": "USD",
     "timezone": "UTC",
-    "platform_split_percent": 30.0,
-    "member_split_percent": 70.0,
+    "split_model": "three_tier_60_15_25",
+    "platform_split_percent": 25.0,
+    "overhead_split_percent": 15.0,
+    "member_split_percent": 60.0,
     "notify_on_milestone": True,
     "notify_on_withdrawal": True,
+    "pricing_tiers": _DEFAULT_PRICING_TIERS,
 }
 _SETTINGS_CACHE = dict(_DEFAULT_SETTINGS)
 SETTINGS_REDIS_KEY = "titancode:financial_settings"
@@ -461,13 +531,13 @@ async def update_financial_settings(
 ) -> Any:
     """
     Update global agency and profit split settings. Restricted to CEO/Admin.
-    Enforces that platform_split_percent + member_split_percent equals 100%.
+    Enforces that platform_split_percent + overhead_split_percent + member_split_percent equals 100%.
     """
-    total_split = payload.platform_split_percent + payload.member_split_percent
+    total_split = payload.platform_split_percent + payload.overhead_split_percent + payload.member_split_percent
     if abs(total_split - 100.0) > 0.01:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Profit split percentages must total 100%. Got {total_split:.2f}% (Platform: {payload.platform_split_percent}%, Team: {payload.member_split_percent}%)",
+            detail=f"Profit split percentages must total 100%. Got {total_split:.2f}% (Platform Treasury: {payload.platform_split_percent}%, Non-Billable Overhead: {payload.overhead_split_percent}%, Squad Pool: {payload.member_split_percent}%)",
         )
 
     updated_dict = payload.model_dump()
@@ -487,31 +557,46 @@ async def update_financial_settings(
 async def calculate_salary_projection(
     budget: float = Query(..., ge=0, description="Total project budget in USD/currency units"),
     member_count: int = Query(1, ge=1, description="Number of participating team members"),
+    split_model: str | None = Query(None, description="Active split model (standard_70_30 or three_tier_60_15_25)"),
     platform_split_percent: float | None = Query(None, ge=0, le=100),
+    overhead_split_percent: float | None = Query(None, ge=0, le=100),
     member_split_percent: float | None = Query(None, ge=0, le=100),
     _current_user: User = Depends(get_current_user),
 ) -> Any:
     """
     Calculate salary and treasury projections based on project budget and profit split logic.
-    Follows TitanCode's standard 70% Member Pool / 30% Company Treasury distribution.
+    Supports both 3-Tier (60% Squad / 15% Overhead / 25% Treasury) and Standard 70/30 distribution.
     """
-    if platform_split_percent is None or member_split_percent is None:
-        active_settings = await _get_active_settings()
-        p_split = active_settings.get("platform_split_percent", 30.0)
-        m_split = active_settings.get("member_split_percent", 70.0)
-    else:
+    active_settings = await _get_active_settings()
+    active_model = split_model or active_settings.get("split_model", "three_tier_60_15_25")
+
+    if platform_split_percent is not None and member_split_percent is not None:
         p_split = platform_split_percent
         m_split = member_split_percent
+        o_split = overhead_split_percent if overhead_split_percent is not None else max(0.0, 100.0 - p_split - m_split)
+    elif active_model == "standard_70_30":
+        p_split = 30.0
+        o_split = 0.0
+        m_split = 70.0
+    else:
+        # three_tier_60_15_25 default
+        p_split = float(active_settings.get("platform_split_percent", 25.0))
+        o_split = float(active_settings.get("overhead_split_percent", 15.0))
+        m_split = float(active_settings.get("member_split_percent", 60.0))
 
     platform_share = round((budget * p_split) / 100.0, 2)
+    overhead_share = round((budget * o_split) / 100.0, 2)
     team_share = round((budget * m_split) / 100.0, 2)
     per_member = round(team_share / member_count, 2) if member_count > 0 else 0.0
 
     return SalaryProjectionResponse(
         total_budget=round(budget, 2),
+        split_model=active_model,
         platform_split_percent=round(p_split, 2),
+        overhead_split_percent=round(o_split, 2),
         member_split_percent=round(m_split, 2),
         platform_treasury_share=platform_share,
+        overhead_pool_share=overhead_share,
         team_pool_share=team_share,
         member_count=member_count,
         projected_salary_per_member=per_member,

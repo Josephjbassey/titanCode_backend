@@ -36,7 +36,7 @@ from app.core.observability import init_sentry
 from app.db.database import engine, AsyncSessionLocal
 from app.db.models import User
 from app.core.domain_enums import UserRole, ApprovalStatus
-from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing, leads, dashboard
+from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing, leads, dashboard, activity
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -177,6 +177,7 @@ app.include_router(client.router, prefix=f"{settings.API_V1_STR}/client", tags=[
 app.include_router(billing.router, prefix=f"{settings.API_V1_STR}/billing", tags=["billing"])
 app.include_router(leads.router, prefix=f"{settings.API_V1_STR}/leads", tags=["leads"])
 app.include_router(dashboard.router, prefix=f"{settings.API_V1_STR}/dashboard", tags=["dashboard"])
+app.include_router(activity.router, prefix=f"{settings.API_V1_STR}/activity", tags=["activity"])
 
 
 # ═══════════════════════════════════════════════════════════════════════
