@@ -41,23 +41,31 @@ def process_payout_calculation(
     """
     payload = {"project_id": project_id, "idempotency_key": idempotency_key, "externally_triggered": externally_triggered}
     try:
+        import concurrent.futures
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            loop = None
 
-        if loop.is_running():
-            return asyncio.run_coroutine_threadsafe(
-                _process_payout_calculation_async(
-                    project_id,
-                    idempotency_key=idempotency_key,
-                    externally_triggered=externally_triggered,
-                ),
-                loop,
-            ).result()
+        if loop and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                return executor.submit(
+                    lambda: asyncio.run(
+                        _process_payout_calculation_async(
+                            project_id,
+                            idempotency_key=idempotency_key,
+                            externally_triggered=externally_triggered,
+                        )
+                    )
+                ).result()
 
-        return loop.run_until_complete(
+        try:
+            cur_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            cur_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(cur_loop)
+
+        return cur_loop.run_until_complete(
             _process_payout_calculation_async(
                 project_id,
                 idempotency_key=idempotency_key,

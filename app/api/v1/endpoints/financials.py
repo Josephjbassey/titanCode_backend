@@ -269,9 +269,20 @@ async def process_withdrawal(
             withdrawal.external_payout_idempotency_key = payout_key
 
         # Connect Paystack Transfers API when configured
-        if settings.PAYSTACK_SECRET_KEY and not settings.PAYSTACK_SECRET_KEY.startswith("sk_live_placeholder"):
+        if settings.PAYSTACK_SECRET_KEY and not settings.PAYSTACK_SECRET_KEY.startswith("sk_live_placeholder") and not settings.PAYSTACK_SECRET_KEY.startswith("sk_test_placeholder"):
             try:
+                import re
                 amount_kobo = int(Decimal(str(withdrawal.amount)) * 100)
+                recipient_code = "RCP_corporate_withdrawal"
+                bank_info_str = str(withdrawal.bank_info or "")
+
+                if bank_info_str.startswith("RCP_"):
+                    recipient_code = bank_info_str
+                elif "RCP_" in bank_info_str:
+                    match = re.search(r"RCP_[a-zA-Z0-9]+", bank_info_str)
+                    if match:
+                        recipient_code = match.group(0)
+
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     paystack_res = await client.post(
                         "https://api.paystack.co/transfer",
@@ -282,12 +293,12 @@ async def process_withdrawal(
                         json={
                             "source": "balance",
                             "amount": amount_kobo,
-                            "recipient": withdrawal.bank_info or "RCP_corporate_withdrawal",
+                            "recipient": recipient_code,
                             "reason": f"TitanCode payout #{withdrawal.id}",
                             "reference": withdrawal.external_payout_idempotency_key,
                         },
                     )
-                    logger.info("Paystack transfer initiated", extra={"status": paystack_res.status_code, "withdrawal_id": withdrawal.id})
+                    logger.info("Paystack transfer initiated", extra={"status": paystack_res.status_code, "withdrawal_id": withdrawal.id, "recipient": recipient_code})
             except Exception as exc:
                 logger.warning("Paystack transfer request error", extra={"error": str(exc), "withdrawal_id": withdrawal.id})
 

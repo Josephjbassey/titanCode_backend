@@ -37,5 +37,5 @@ When a client clicks "Submit" on the Hire Us form:
 ---
 
 ## 4. Financial "Safety Net"
-*   **Stripe Integration**: Even though onboarding is manual, payments are automated.
+*   **Paystack Integration**: Even though onboarding is manual, payments and disbursals are automated via Paystack webhooks and Transfers API.
 *   **70/30 Split**: The system ensures every developer gets paid exactly their share without any manual calculation needed from the PM.

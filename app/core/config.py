@@ -169,7 +169,11 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
     
-    # ── External Links ──────────────────────────────────────────────────
+    # ── External Integrations (HubSpot CRM, Slack, Support) ─────────────
+    HUBSPOT_ACCESS_TOKEN: Optional[str] = None
+    SLACK_WEBHOOK_URL: Optional[str] = None
+    GITHUB_ISSUES_URL: str = "https://github.com/titancode/titancode/issues"
+    SLACK_IT_CHANNEL: str = "https://slack.com/app_redirect?channel=it-support"
     CALENDLY_URL: Optional[str] = None
 
     # Tell Pydantic to read variables from the .env file

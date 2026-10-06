@@ -31,8 +31,20 @@ from app.db.database import get_db
 from app.db.models import User
 from main import app
 
+from unittest.mock import AsyncMock
+
 celery_app.conf.task_always_eager = True
 celery_app.conf.task_eager_propagates = True
+
+
+@pytest.fixture(autouse=True)
+def _mock_background_transports(monkeypatch):
+    """Ensure tests run hermetically without contacting external mail/websocket/redis services."""
+    monkeypatch.setattr("app.core.tasks.enqueue_websocket_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.core.tasks.enqueue_email_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.api.v1.endpoints.financials.enqueue_websocket_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.api.v1.endpoints.financials.enqueue_email_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.core.notifications.manager.send_personal_message", AsyncMock(return_value=None))
 
 # ── Separate test engine ───────────────────────────────────────────────
 # NullPool disables connection pooling — each request gets a fresh

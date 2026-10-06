@@ -5,15 +5,19 @@ This module handles CRUD operations for client projects.
 Projects represent paid work for external clients.
 """
 
+import logging
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from typing import Any, List
 from sqlalchemy import func
 
+from app.core.config import settings
 from app.db.database import get_db
-from app.db.models import Project, User, project_members
+from app.db.models import AuditLog, Project, User, project_members, utcnow
 from app.schemas.project import (
     Project as ProjectSchema,
     ProjectCreate,
@@ -26,12 +30,30 @@ from app.core.notifications import manager as notification_manager
 from app.core.email import send_email
 from app.tasks.financials import process_payout_calculation
 
+logger = logging.getLogger(__name__)
+
 # Create a new router instance
 router = APIRouter()
 
 # ── RBAC Dependencies ──────────────────────────────────────────────────
 allow_managers = RoleChecker(["CEO", "Admin", "Manager"])
 allow_admin = RoleChecker(["CEO", "Admin"])
+
+
+class ProjectCommentCreate(BaseModel):
+    content: str
+
+
+class ProjectCommentItem(BaseModel):
+    id: int
+    project_id: int
+    content: str
+    author_id: int | None = None
+    author_name: str
+    author_role: str
+    author_avatar: str | None = None
+    created_at: datetime
+
 
 
 @router.post("/create", response_model=ProjectSchema, status_code=status.HTTP_201_CREATED)
@@ -141,9 +163,23 @@ async def update_project(
     await db.commit()
     await db.refresh(project, attribute_names=["members"])
     
-    # Step 5: Trigger Background Payout Task (Constraint #2 compliance)
+    # Step 5: Trigger Background Payout Task (Constraint #2 compliance) & Slack Notification
     if trigger_payout:
         process_payout_calculation.delay(project.id)
+        if settings.SLACK_WEBHOOK_URL:
+            try:
+                import httpx
+                slack_msg = {
+                    "text": (
+                        f"🚀 *Project Completed:* {project.name}\n"
+                        f"*Budget:* ${float(project.budget):,.2f} USD\n"
+                        f"Automated squad payouts initiated via Paystack multi-currency settlement."
+                    )
+                }
+                async with httpx.AsyncClient(timeout=4.0) as client_http:
+                    await client_http.post(settings.SLACK_WEBHOOK_URL, json=slack_msg)
+            except Exception as exc:
+                logger.warning("Slack milestone dispatch failed: %s", exc)
 
     # Step 6: Notify client on status change
     if project_in.status and project.client_id:
@@ -213,6 +249,146 @@ async def update_project(
     return project
 
 
+@router.get("/{project_id}/comments", response_model=List[ProjectCommentItem])
+async def get_project_comments(
+    project_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Retrieve chronological discussion updates and team comments for a project.
+    """
+    result = await db.execute(
+        select(Project).options(selectinload(Project.members)).where(Project.id == project_id)
+    )
+    project = result.scalars().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role not in ["CEO", "Admin"] and project.client_id != current_user.id:
+        if current_user.id not in [m.id for m in project.members]:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    stmt = (
+        select(AuditLog)
+        .where(
+            AuditLog.target_type == "project",
+            AuditLog.target_id == project_id,
+            AuditLog.action == "project_comment",
+        )
+        .order_by(AuditLog.created_at.asc())
+    )
+    comments_result = await db.execute(stmt)
+    records = comments_result.scalars().all()
+
+    items = []
+    for r in records:
+        details = r.details or {}
+        items.append(
+            ProjectCommentItem(
+                id=r.id,
+                project_id=project_id,
+                content=details.get("message", ""),
+                author_id=r.actor_id,
+                author_name=details.get("author_name", "Team Member"),
+                author_role=details.get("author_role", "Member"),
+                author_avatar=details.get("author_avatar"),
+                created_at=r.created_at,
+            )
+        )
+    return items
+
+
+@router.post("/{project_id}/comments", response_model=ProjectCommentItem, status_code=status.HTTP_201_CREATED)
+async def add_project_comment(
+    project_id: int,
+    body: ProjectCommentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Any:
+    """
+    Post a project discussion comment or milestone update.
+    Dispatches to Slack workspace and triggers real-time WebSocket alerts to participants.
+    """
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Comment content cannot be empty")
+
+    result = await db.execute(
+        select(Project).options(selectinload(Project.members)).where(Project.id == project_id)
+    )
+    project = result.scalars().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if current_user.role not in ["CEO", "Admin"] and project.client_id != current_user.id:
+        if current_user.id not in [m.id for m in project.members]:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    author_name = current_user.full_name or current_user.email
+    author_avatar = getattr(current_user, "avatar_url", None) or getattr(current_user, "avatar", None)
+    comment_audit = AuditLog(
+        actor_type="user",
+        actor_id=current_user.id,
+        action="project_comment",
+        target_type="project",
+        target_id=project.id,
+        details={
+            "message": content,
+            "author_name": author_name,
+            "author_role": current_user.role,
+            "author_avatar": author_avatar,
+        },
+        created_at=utcnow(),
+    )
+    db.add(comment_audit)
+    await db.commit()
+    await db.refresh(comment_audit)
+
+    # 1. Post to Slack if configured
+    if settings.SLACK_WEBHOOK_URL:
+        try:
+            import httpx
+            slack_msg = {
+                "text": (
+                    f"💬 *Project Update on {project.name}*\n"
+                    f"*From:* {author_name} ({current_user.role})\n"
+                    f">{content}"
+                )
+            }
+            async with httpx.AsyncClient(timeout=4.0) as client_http:
+                await client_http.post(settings.SLACK_WEBHOOK_URL, json=slack_msg)
+        except Exception as exc:
+            logger.warning("Slack comment notification failed: %s", exc)
+
+    # 2. Push WebSocket notification to project participants
+    recipients = {m.id for m in project.members}
+    if project.client_id:
+        recipients.add(project.client_id)
+    recipients.discard(current_user.id)
+    for uid in recipients:
+        await notification_manager.send_personal_message(
+            user_id=uid,
+            message={
+                "type": "project_comment",
+                "title": f"New update on {project.name}",
+                "message": f"{author_name}: {content[:100]}",
+                "project_id": project.id,
+            },
+        )
+
+    return ProjectCommentItem(
+        id=comment_audit.id,
+        project_id=project.id,
+        content=content,
+        author_id=current_user.id,
+        author_name=author_name,
+        author_role=current_user.role,
+        author_avatar=author_avatar,
+        created_at=comment_audit.created_at,
+    )
+
+
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: int,
@@ -237,3 +413,4 @@ async def request_project(
             "Deprecated endpoint. Use POST /api/v1/leads as the canonical lead intake flow."
         ),
     )
+

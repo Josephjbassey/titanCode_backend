@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,74 @@ from app.db.database import get_db
 from app.db.models import ClientInquiry, Project, User
 from app.schemas.client import ClientInquiry as ClientInquirySchema
 from app.schemas.project import Project as ProjectSchema
+
+logger = logging.getLogger(__name__)
+
+
+async def sync_lead_to_hubspot(inquiry: ClientInquiry) -> dict[str, Any]:
+    """
+    Syncs a lead/client inquiry to HubSpot CRM Contacts API v3.
+    Non-blocking and fails open so lead intake is never blocked by external downtime.
+    """
+    if not settings.HUBSPOT_ACCESS_TOKEN:
+        return {
+            "status": "standby",
+            "message": "HUBSPOT_ACCESS_TOKEN is not configured in backend .env. Lead recorded in TitanCode CRM.",
+        }
+
+    try:
+        import httpx
+        names = (inquiry.full_name or "Lead").strip().split(" ", 1)
+        first_name = names[0]
+        last_name = names[1] if len(names) > 1 else ""
+
+        payload = {
+            "properties": {
+                "email": inquiry.email,
+                "firstname": first_name,
+                "lastname": last_name,
+                "phone": inquiry.phone or "",
+                "company": inquiry.company or "",
+                "message": (inquiry.message or "")[:1000],
+                "hs_lead_status": "NEW",
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                "https://api.hubspot.com/crm/v3/objects/contacts",
+                headers={
+                    "Authorization": f"Bearer {settings.HUBSPOT_ACCESS_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return {
+                    "status": "synced",
+                    "hubspot_id": data.get("id"),
+                    "message": "Contact synced successfully to HubSpot CRM.",
+                }
+            elif resp.status_code == 409:
+                return {
+                    "status": "already_exists",
+                    "message": "Contact already exists in HubSpot CRM.",
+                }
+            else:
+                logger.warning("HubSpot API error %s: %s", resp.status_code, resp.text)
+                return {
+                    "status": "error",
+                    "code": resp.status_code,
+                    "message": f"HubSpot responded with status {resp.status_code}",
+                }
+    except Exception as exc:
+        logger.warning("HubSpot lead sync failed: %s", exc)
+        return {
+            "status": "failed",
+            "error": str(exc),
+        }
+
 
 router = APIRouter()
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -142,6 +211,14 @@ async def create_lead(payload: LeadCreate, db: AsyncSession = Depends(get_db)) -
             f"<br><p>Best regards,<br><strong>The TitanCode Team</strong></p>"
         ),
     )
+
+    # 3. SYNC TO HUBSPOT CRM (Optional / Non-blocking)
+    if settings.HUBSPOT_ACCESS_TOKEN:
+        try:
+            await sync_lead_to_hubspot(inquiry)
+        except Exception as exc:
+            logger.warning("HubSpot sync encountered non-blocking error: %s", exc)
+
     return inquiry
 
 
@@ -171,6 +248,30 @@ async def get_lead(lead_id: int, db: AsyncSession = Depends(get_db), _current_us
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
+
+
+@router.post("/{lead_id}/sync-hubspot")
+async def sync_lead_hubspot_endpoint(
+    lead_id: int,
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(allow_admin),
+) -> Any:
+    """
+    On-demand sync of a lead/inquiry to HubSpot CRM Contacts.
+    Allows manual or automated sync from TitanCode CRM.
+    """
+    result = await db.execute(select(ClientInquiry).where(ClientInquiry.id == lead_id))
+    lead = result.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    sync_result = await sync_lead_to_hubspot(lead)
+    return {
+        "lead_id": lead.id,
+        "email": lead.email,
+        "full_name": lead.full_name,
+        "sync_result": sync_result,
+    }
 
 
 @router.patch("/{lead_id}", response_model=ClientInquirySchema)

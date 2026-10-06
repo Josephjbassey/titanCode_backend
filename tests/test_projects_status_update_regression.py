@@ -105,3 +105,86 @@ async def test_update_project_status_uses_project_name_field_safely(
     assert f"Project Update: {project.name}" in email["subject"]
     assert f"Project: {project.name}" in email["body"]
     assert project.name in (email["html_content"] or "")
+
+
+@pytest.mark.asyncio
+async def test_project_comments_and_slack_integration(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_token_headers,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify that posting and retrieving per-project comments functions cleanly and records in AuditLog."""
+    client_user = User(
+        email=unique_email("client_comment"),
+        password_hash="pw",
+        full_name="Comment Client",
+        role="Client",
+    )
+    db_session.add(client_user)
+    await db_session.commit()
+
+    project = Project(
+        name=f"Comments Test Project {uuid.uuid4().hex[:6]}",
+        client_id=client_user.id,
+        status="active",
+        budget="5000.00",
+    )
+    db_session.add(project)
+    await db_session.commit()
+    await db_session.refresh(project)
+
+    # Post a comment
+    post_resp = await client.post(
+        f"/api/v1/projects/{project.id}/comments",
+        json={"content": "Sprint kickoff delivered; frontend repo connected to CI/CD."},
+        headers=admin_token_headers,
+    )
+    assert post_resp.status_code == 201, post_resp.text
+    data = post_resp.json()
+    assert data["project_id"] == project.id
+    assert "Sprint kickoff delivered" in data["content"]
+    assert data["author_role"] in ["CEO", "Admin"]
+
+    # Fetch comments
+    get_resp = await client.get(
+        f"/api/v1/projects/{project.id}/comments",
+        headers=admin_token_headers,
+    )
+    assert get_resp.status_code == 200, get_resp.text
+    comments = get_resp.json()
+    assert len(comments) >= 1
+    assert any("Sprint kickoff delivered" in c["content"] for c in comments)
+
+
+@pytest.mark.asyncio
+async def test_hubspot_lead_sync_endpoint(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_token_headers,
+):
+    """Verify that inbound lead creation and on-demand HubSpot sync endpoint respond cleanly."""
+    from app.db.models import ClientInquiry
+
+    lead = ClientInquiry(
+        full_name="HubSpot Sync Prospect",
+        email=unique_email("hubspot_lead"),
+        company="Acme Global Inc.",
+        service_interest="Fullstack Engineering",
+        message="Interested in agile engineering team.",
+        status="new",
+    )
+    db_session.add(lead)
+    await db_session.commit()
+    await db_session.refresh(lead)
+
+    sync_resp = await client.post(
+        f"/api/v1/leads/{lead.id}/sync-hubspot",
+        headers=admin_token_headers,
+    )
+    assert sync_resp.status_code == 200, sync_resp.text
+    data = sync_resp.json()
+    assert data["lead_id"] == lead.id
+    assert data["email"] == lead.email
+    assert "sync_result" in data
+

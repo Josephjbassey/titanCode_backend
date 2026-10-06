@@ -26,16 +26,23 @@ MAX_RETRY_DELAY_SECONDS = 300
 
 
 def _run_async(coro):
-    """Run async coroutine safely from sync Celery workers."""
+    """Run async coroutine safely from sync Celery workers or eager test runners."""
+    import concurrent.futures
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        loop = None
 
-    if loop.is_running():
-        return asyncio.run_coroutine_threadsafe(coro, loop).result()
-    return loop.run_until_complete(coro)
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(lambda: asyncio.run(coro)).result()
+
+    try:
+        cur_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        cur_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(cur_loop)
+    return cur_loop.run_until_complete(coro)
 
 
 def _retry_delay(retries: int) -> int:

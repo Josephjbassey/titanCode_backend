@@ -41,9 +41,9 @@ To maximize conversion, we have combined Project Discovery and Account Registrat
 
 ## 3. Financial Flow (The 70/30 Split)
 
-1.  **Project Completion**: When the project is ready, the Manager sends a Stripe link to the client manually.
-2.  **Payment**: The client pays via Stripe.
-3.  **Auto-Payout**: The Stripe Webhook triggers the internal system to:
-    *   Credit the **team members (70%)**.
+1.  **Project Completion**: When the project milestone is ready, the Manager generates a Paystack payment link or invoice for the client.
+2.  **Payment**: The client pays in USD or local currency via Paystack.
+3.  **Auto-Payout**: The Paystack Webhook (`/api/v1/webhooks/paystack`) triggers the internal system to:
+    *   Credit the **team members (70%)** (or 3-Tier Split: 60% Squad / 15% Overhead / 25% Treasury).
     *   Credit the **company treasury (30%)**.
-4.  **Transparency**: All internal users (Members, Managers) see their earnings in their personal Wallets.
+4.  **Transparency & Disbursal**: All internal users (Members, Managers) see their earnings in their personal USD Wallets, and withdraw directly to their local or USD Domiciliary bank accounts via Paystack Transfers API.
