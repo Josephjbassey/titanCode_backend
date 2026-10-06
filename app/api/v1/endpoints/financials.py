@@ -251,7 +251,12 @@ async def process_withdrawal(
         raise HTTPException(status_code=400, detail="Missing withdrawal action or status")
 
     if target_status == "paid":
-        payout_key = action.idempotency_key or f"paystack:transfer:{withdrawal.id}:{uuid.uuid4().hex[:12]}"
+        if not action.idempotency_key:
+            raise HTTPException(
+                status_code=400,
+                detail="idempotency_key is required when status is paid",
+            )
+        payout_key = action.idempotency_key
         if (
             withdrawal.external_payout_idempotency_key
             and withdrawal.external_payout_idempotency_key != payout_key
@@ -454,10 +459,10 @@ class FinancialSettingsModel(BaseModel):
     support_email: str = "support@titancode.agency"
     currency: str = "USD"
     timezone: str = "UTC"
-    split_model: str = "three_tier_60_15_25"  # "standard_70_30" | "three_tier_60_15_25" | "custom"
-    platform_split_percent: float = 25.0
-    overhead_split_percent: float = 15.0
-    member_split_percent: float = 60.0
+    split_model: str = "standard_70_30"  # "standard_70_30" | "three_tier_60_15_25" | "custom"
+    platform_split_percent: float = 30.0
+    overhead_split_percent: float = 0.0
+    member_split_percent: float = 70.0
     notify_on_milestone: bool = True
     notify_on_withdrawal: bool = True
     pricing_tiers: List[PricingTierModel] = []
@@ -465,9 +470,9 @@ class FinancialSettingsModel(BaseModel):
 
 class SalaryProjectionResponse(BaseModel):
     total_budget: float
-    split_model: str = "three_tier_60_15_25"
+    split_model: str = "standard_70_30"
     platform_split_percent: float
-    overhead_split_percent: float = 15.0
+    overhead_split_percent: float = 0.0
     member_split_percent: float
     platform_treasury_share: float
     overhead_pool_share: float = 0.0
@@ -488,10 +493,10 @@ _DEFAULT_SETTINGS = {
     "support_email": "support@titancode.agency",
     "currency": "USD",
     "timezone": "UTC",
-    "split_model": "three_tier_60_15_25",
-    "platform_split_percent": 25.0,
-    "overhead_split_percent": 15.0,
-    "member_split_percent": 60.0,
+    "split_model": "standard_70_30",
+    "platform_split_percent": 30.0,
+    "overhead_split_percent": 0.0,
+    "member_split_percent": 70.0,
     "notify_on_milestone": True,
     "notify_on_withdrawal": True,
     "pricing_tiers": _DEFAULT_PRICING_TIERS,
@@ -504,7 +509,7 @@ async def _get_active_settings() -> dict:
     try:
         redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
         raw = await redis.get(SETTINGS_REDIS_KEY)
-        await redis.close()
+        await redis.aclose()
         if raw:
             return json.loads(raw)
     except Exception:
@@ -546,7 +551,7 @@ async def update_financial_settings(
     try:
         redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
         await redis.set(SETTINGS_REDIS_KEY, json.dumps(updated_dict))
-        await redis.close()
+        await redis.aclose()
     except Exception:
         pass
 

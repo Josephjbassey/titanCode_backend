@@ -26,9 +26,13 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./titancode_test.db")
 os.environ.setdefault("FIRST_SUPERUSER_PASSWORD", "TestAdminPass123!")
 
 from app.core.config import settings
+from app.core.celery_app import celery_app
 from app.db.database import get_db
 from app.db.models import User
 from main import app
+
+celery_app.conf.task_always_eager = True
+celery_app.conf.task_eager_propagates = True
 
 # ── Separate test engine ───────────────────────────────────────────────
 # NullPool disables connection pooling — each request gets a fresh
