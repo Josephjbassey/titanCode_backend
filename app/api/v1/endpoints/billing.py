@@ -15,9 +15,11 @@ from app.core.config import settings
 from app.core.pdf_generator import generate_invoice_pdf
 from app.core.tasks import enqueue_email_task
 from fastapi.concurrency import run_in_threadpool
+from app.api.v1.endpoints.financials import _get_active_settings
 
 from app.core.rate_limiter import limiter
 from app.services.billing_service import BillingService
+from app.core.currency import to_subunits, from_subunits
 router = APIRouter()
 
 allow_admin = RoleChecker(["CEO", "Admin"])
@@ -58,8 +60,8 @@ class InvoiceStatusUpdateRequest(BaseModel):
     status: str
 
 
-def _to_cents(amount: Decimal) -> int:
-    return int((amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+def _to_cents(amount: Decimal, currency: str = "USD") -> int:
+    return to_subunits(amount, currency)
 
 
 async def _initialize_paystack_payment(*, amount: Decimal, email: str, metadata: dict[str, Any]) -> str:
@@ -84,7 +86,7 @@ async def _initialize_paystack_payment(*, amount: Decimal, email: str, metadata:
     return auth_url
 
 
-async def _initialize_flutterwave_payment(*, amount: Decimal, email: str, metadata: dict[str, Any]) -> str:
+async def _initialize_flutterwave_payment(*, amount: Decimal, email: str, metadata: dict[str, Any], payment_redirect_url: str = "https://titancode.com/payments/complete") -> str:
     if not settings.FLUTTERWAVE_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Flutterwave secret key is not configured")
 
@@ -92,7 +94,7 @@ async def _initialize_flutterwave_payment(*, amount: Decimal, email: str, metada
         "tx_ref": f"tc_{metadata['invoice_id']}",
         "amount": f"{amount:.2f}",
         "currency": "USD",
-        "redirect_url": "https://titancode.com/payments/complete",
+        "redirect_url": payment_redirect_url,
         "customer": {"email": email},
         "customizations": {"title": "TitanCode Invoice Payment"},
         "meta": metadata,
@@ -143,6 +145,11 @@ async def generate_invoice(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    active_settings = await _get_active_settings()
+    company_profile = active_settings.get("company_profile", {})
+    payment_redirect_url = company_profile.get("payment_redirect_url", "https://titancode.com/payments/complete")
+    email_signature = company_profile.get("email_signature", "— TitanCode Finance Team")
+
     if body.payment_method == "paystack":
         payment_url = await _initialize_paystack_payment(
             amount=total_amount,
@@ -154,6 +161,7 @@ async def generate_invoice(
             amount=total_amount,
             email=body.email,
             metadata=metadata,
+            payment_redirect_url=payment_redirect_url,
         )
     else:
         raise HTTPException(status_code=400, detail="Invalid payment method")
@@ -176,7 +184,7 @@ async def generate_invoice(
             f"Please complete payment securely via {body.payment_method.capitalize()}:\n"
             f"{payment_url}\n\n"
             f"Invoice ID: {invoice_id}\n\n"
-            "— TitanCode Finance Team"
+            f"{email_signature}"
         ),
         html_content=(
             f"<p>Hi <strong>{body.client_name}</strong>,</p>"
@@ -184,7 +192,7 @@ async def generate_invoice(
             f"<p><strong>Total Due: ${total_amount:.2f}</strong></p>"
             f"<p><a href='{payment_url}'>Pay securely via {body.payment_method.capitalize()}</a></p>"
             f"<p><strong>Invoice ID:</strong> {invoice_id}</p>"
-            f"<br><p>— TitanCode Finance Team</p>"
+            f"<br><p>{email_signature}</p>"
         ),
     )
     invoice = ClientInvoice(
