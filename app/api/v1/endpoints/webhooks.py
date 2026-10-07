@@ -19,9 +19,39 @@ from app.schemas.webhooks import (
     StripeWebhookEnvelope,
 )
 from app.services.webhook_service import WebhookService, WebhookValidationError, WebhookProcessingError
+from app.core.currency import from_subunits, to_subunits
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# STARTUP VALIDATION — warn if critical webhook secrets are not set
+# ═══════════════════════════════════════════════════════════════════════
+def _warn_missing_secrets() -> None:
+    """Warn at import-time if critical webhook secrets are not configured.
+
+    This never raises or exits — it only emits warnings so that developers
+    see a clear message in the server log rather than a silent validation
+    failure the first time a live webhook hits the endpoint.
+    """
+    checks = {
+        "PAYSTACK_SECRET_KEY": settings.PAYSTACK_SECRET_KEY,
+        "FLUTTERWAVE_WEBHOOK_SECRET": settings.FLUTTERWAVE_WEBHOOK_SECRET,
+        "STRIPE_WEBHOOK_SECRET": settings.STRIPE_WEBHOOK_SECRET,
+        "SUMSUB_SECRET_KEY": settings.SUMSUB_SECRET_KEY,
+    }
+    for name, value in checks.items():
+        if not value:
+            logger.warning(
+                "⚠️  %s is not set — %s webhook validation will be DISABLED. "
+                "Set this in your .env file before accepting live payments.",
+                name,
+                name.split("_")[0].capitalize(),
+            )
+
+
+_warn_missing_secrets()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -78,9 +108,10 @@ async def paystack_webhook(
         project_id_str = meta.get("project_id")
         if project_id_str:
             try:
-                # Paystack amounts are in kobo (base unit * 100)
+                # Paystack amounts are received in integer subunits (kobo / cents)
                 raw_amount = data.get("amount", 0)
-                amount_decimal = Decimal(str(raw_amount)) / 100
+                currency = data.get("currency", "USD")
+                amount_decimal = from_subunits(int(raw_amount), currency)
 
                 await WebhookService.process_project_payment_success(
                     db=db_session,
@@ -110,7 +141,8 @@ async def paystack_webhook(
     elif event.event == "transfer.success":
         reference = data.get("reference") or data.get("transfer_code")
         raw_amount = data.get("amount", 0)
-        amount_decimal = Decimal(str(raw_amount)) / 100 if raw_amount else None
+        currency = data.get("currency", "USD")
+        amount_decimal = from_subunits(int(raw_amount), currency) if raw_amount else None
         if reference:
             await WebhookService.process_withdrawal_payout_success(
                 db=db_session,
@@ -343,7 +375,8 @@ async def stripe_webhook(
         project_id_str = meta.get("project_id")
         if project_id_str:
             raw_amount = data_obj.get("amount") or data_obj.get("amount_received") or 0
-            amount_decimal = Decimal(str(raw_amount)) / 100
+            currency = data_obj.get("currency", "USD")
+            amount_decimal = from_subunits(int(raw_amount), currency)
             await WebhookService.process_project_payment_success(
                 db=db_session,
                 provider="stripe",
