@@ -57,21 +57,21 @@ async def test_payout_task_idempotency_and_logic(db_session: AsyncSession):
     await _process_payout_calculation_async(project_id=project.id)
 
     # STEP 6: VERIFY THE MATH
-    # Total: 1000 | Team (70%): 700 | Company (30%): 300
-    # Per Member (700 / 2): 350
+    # Total: 1000 | Squad (60%): 600 | Overhead (15%): 150 | Treasury (25%): 250
+    # Per Member (600 / 2): 300
     total_budget = Decimal("1000.00")
-    team_share = Decimal("700.00")
-    per_member = Decimal("350.00")
+    team_share = Decimal("600.00")
+    per_member = Decimal("300.00")
 
-    # Check Member 1's Wallet: Should have exactly 350.00
+    # Check Member 1's Wallet: Should have exactly 300.00
     res1 = await db_session.execute(select(Wallet).where(Wallet.user_id == m1.id))
     wallet_m1 = res1.scalars().first()
     assert wallet_m1.balance == per_member
     
-    # Check Company Wallet: Should have exactly 300.00
+    # Check Company Wallet: Should have treasury (250) + overhead (150) = 400.00
     res_admin = await db_session.execute(select(Wallet).where(Wallet.user_id == admin.id))
     wallet_admin = res_admin.scalars().first()
-    assert wallet_admin.balance == Decimal("300.00")
+    assert wallet_admin.balance == Decimal("400.00")
 
     # STEP 7: IDEMPOTENCY CHECK
     # We run the task again. It should see the PayoutInvoice exists and QUIT without adding more money.
@@ -137,3 +137,101 @@ async def test_api_payout_approval_rbac(client: AsyncClient, db_session: AsyncSe
     response = await client.post(f"/api/v1/financials/payouts/{invoice.id}/approve", headers=admin_token_headers)
     assert response.status_code == 200
     assert response.json()["is_approved"] is True
+
+
+def test_currency_subunit_utilities():
+    """
+    Test conversion between major currency units and smallest integer subunits (zero decimals).
+    """
+    from app.core.currency import (
+        to_subunits,
+        from_subunits,
+        distribute_subunits_equally,
+        split_subunits_by_percentages,
+    )
+
+    # 1. USD: 1000.00 USD -> 100,000 cents
+    assert to_subunits(Decimal("1000.00"), "USD") == 100000
+    assert to_subunits(1000.00, "USD") == 100000
+    assert to_subunits("1000.00", "USD") == 100000
+    assert from_subunits(100000, "USD") == Decimal("1000.00")
+
+    # 2. NGN (Nigerian Naira): 500.50 NGN -> 50,050 kobo
+    assert to_subunits(Decimal("500.50"), "NGN") == 50050
+    assert from_subunits(50050, "NGN") == Decimal("500.50")
+
+    # 3. GHS (Ghanaian Cedi): 250.75 GHS -> 25,075 pesewas
+    assert to_subunits(Decimal("250.75"), "GHS") == 25075
+    assert from_subunits(25075, "GHS") == Decimal("250.75")
+
+    # 4. Zero-decimal currency: JPY (Japanese Yen)
+    assert to_subunits(5000, "JPY") == 5000
+    assert from_subunits(5000, "JPY") == Decimal("5000")
+
+    # 5. Equal distribution with odd remainder (e.g., 70,000 cents among 3 members)
+    shares = distribute_subunits_equally(70000, 3)
+    assert len(shares) == 3
+    assert shares == [23334, 23333, 23333]
+    assert sum(shares) == 70000
+
+    # 6. Split by percentages preserves exact total
+    splits = split_subunits_by_percentages(
+        100000,
+        {"squad": 60.0, "overhead": 15.0, "treasury": 25.0},
+        remainder_key="treasury",
+    )
+    assert splits["squad"] == 60000
+    assert splits["overhead"] == 15000
+    assert splits["treasury"] == 25000
+    assert sum(splits.values()) == 100000
+
+
+@pytest.mark.asyncio
+async def test_currency_subunits_zero_loss_odd_splits(db_session: AsyncSession):
+    """
+    Verify that project payouts split across an odd number of members
+    lose zero subunits/cents (conservation of funds).
+    """
+    admin = User(email=get_unique_email("admin_subunits@titan.com"), password_hash="pw", full_name="Admin", role="Admin")
+    m1 = User(email=get_unique_email("m1_odd@titan.com"), password_hash="pw", full_name="Member 1", role="Member")
+    m2 = User(email=get_unique_email("m2_odd@titan.com"), password_hash="pw", full_name="Member 2", role="Member")
+    m3 = User(email=get_unique_email("m3_odd@titan.com"), password_hash="pw", full_name="Member 3", role="Member")
+    db_session.add_all([admin, m1, m2, m3])
+    await db_session.commit()
+
+    # Project with $1000.00 budget split across 3 members
+    project = Project(
+        name="Odd Split Subunits Project",
+        client_id=admin.id,
+        budget=Decimal("1000.00"),
+        status="completed",
+    )
+    project.members = [m1, m2, m3]
+    db_session.add(project)
+    await db_session.commit()
+    await db_session.refresh(project, attribute_names=["members"])
+
+    for u in [m1, m2, m3, admin]:
+        db_session.add(Wallet(user_id=u.id, balance=Decimal("0.00"), currency="USD"))
+    await db_session.commit()
+
+    # Process payout
+    await _process_payout_calculation_async(project_id=project.id)
+
+    # Check member wallets
+    w1 = (await db_session.execute(select(Wallet).where(Wallet.user_id == m1.id))).scalars().first()
+    w2 = (await db_session.execute(select(Wallet).where(Wallet.user_id == m2.id))).scalars().first()
+    w3 = (await db_session.execute(select(Wallet).where(Wallet.user_id == m3.id))).scalars().first()
+    w_admin = (await db_session.execute(select(Wallet).where(Wallet.user_id == admin.id))).scalars().first()
+
+    # In default 70/30 split:
+    # Squad share: 70,000 cents ($700.00).
+    # 70000 // 3 = 23333 cents, remainder 1 cent allocated to member 1.
+    assert w1.balance == Decimal("233.34")
+    assert w2.balance == Decimal("233.33")
+    assert w3.balance == Decimal("233.33")
+    assert (w1.balance + w2.balance + w3.balance) == Decimal("700.00")
+    assert w_admin.balance == Decimal("300.00")
+
+    # In total: 233.34 + 233.33 + 233.33 + 300.00 = 1000.00
+    assert (w1.balance + w2.balance + w3.balance + w_admin.balance) == Decimal("1000.00")

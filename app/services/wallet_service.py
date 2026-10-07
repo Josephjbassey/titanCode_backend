@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import Wallet, Transaction
+from app.core.currency import to_subunits, from_subunits
 
 
 class WalletServiceError(Exception):
@@ -72,16 +73,23 @@ class WalletService:
                             )
                         return existing, wallet, True
 
+                currency = getattr(wallet, "currency", "USD") or "USD"
+                curr_balance_subunits = to_subunits(wallet.balance, currency)
+                tx_subunits = to_subunits(amount, currency)
+
                 if transaction_type == "debit":
-                    if wallet.balance < amount:
+                    if curr_balance_subunits < tx_subunits:
                         raise InsufficientFundsError(f"Insufficient funds. Current balance: {wallet.balance}")
-                    wallet.balance = wallet.balance - amount
+                    new_balance_subunits = curr_balance_subunits - tx_subunits
                 else:
-                    wallet.balance = wallet.balance + amount
+                    new_balance_subunits = curr_balance_subunits + tx_subunits
+
+                clean_amount = from_subunits(tx_subunits, currency)
+                wallet.balance = from_subunits(new_balance_subunits, currency)
 
                 transaction = Transaction(
                     wallet_id=wallet_id,
-                    amount=amount,
+                    amount=clean_amount,
                     transaction_type=transaction_type,
                     description=description,
                     reference_id=reference_id,

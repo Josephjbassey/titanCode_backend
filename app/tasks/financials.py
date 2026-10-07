@@ -20,6 +20,12 @@ from app.db.models import Project, User, Wallet, Transaction, PayoutInvoice
 from app.services.financial_integrity import ensure_transaction_recorded, reconcile_wallet_ledgers
 from app.core.tasks import enqueue_email_task
 from app.core.config import settings
+from app.core.currency import (
+    to_subunits,
+    from_subunits,
+    distribute_subunits_equally,
+    split_subunits_by_percentages,
+)
 
 # ── Structured JSON Logging ───────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -144,43 +150,84 @@ async def _process_payout_calculation_async(
                     return False
                     
                 members = project.members
+                currency = getattr(project, "currency", "USD") or "USD"
                 
                 # 3. PROFIT SPLIT CALCULATION: Dynamic Split (3-Tier or 70/30)
+                # Work strictly in the smallest unit of the currency (e.g. cents, kobo)
+                # to prevent decimal rounding errors, fractional drift, and penny leakage.
                 from app.api.v1.endpoints.financials import _get_active_settings
                 active_settings = await _get_active_settings()
-                
-                m_pct = Decimal(str(active_settings.get("member_split_percent", 60.0))) / Decimal("100.0")
-                o_pct = Decimal(str(active_settings.get("overhead_split_percent", 15.0))) / Decimal("100.0")
 
-                total_member_payout = (project.budget * m_pct).quantize(Decimal("0.01"))
-                total_overhead_payout = (project.budget * o_pct).quantize(Decimal("0.01"))
-                company_share = project.budget - total_member_payout - total_overhead_payout
-                
+                budget_subunits = to_subunits(project.budget, currency)
+
+                m_split_pct = active_settings.get("member_split_percent", 60.0)
+                o_split_pct = active_settings.get("overhead_split_percent", 15.0)
+                p_split_pct = active_settings.get("platform_split_percent", 25.0)
+
+                split_subunits = split_subunits_by_percentages(
+                    budget_subunits,
+                    {"squad": m_split_pct, "overhead": o_split_pct, "treasury": p_split_pct},
+                    remainder_key="treasury",
+                )
+
+                squad_subunits = split_subunits["squad"]
+                overhead_subunits = split_subunits["overhead"]
+                treasury_subunits = split_subunits["treasury"]
+
                 if not members:
-                    # If no members, the full squad share is kept by the company as backup.
-                    per_member_payout = Decimal("0.00")
+                    # If no members, the full squad share is kept by treasury
+                    treasury_subunits += squad_subunits
+                    squad_subunits = 0
+                    member_shares = []
                 else:
-                    # Divide the team's share equally among all members.
-                    per_member_payout = total_member_payout / Decimal(len(members))
-                    # '.quantize' rounds the value to exactly 2 decimal places (cents).
-                    per_member_payout = per_member_payout.quantize(Decimal("0.01"))
-                    
+                    # Weighted distribution by role
+                    role_weights = active_settings.get("role_weights", {})
+                    default_weight = 1.0
+
+                    # Build weight list in same order as members list
+                    weights = [
+                        float(role_weights.get(getattr(m, "role", "Member"), default_weight))
+                        for m in members
+                    ]
+                    total_weight = sum(weights) or 1.0  # guard against zero
+
+                    # Distribute proportionally — still in integer subunits to avoid penny leakage
+                    # Compute each member's share as floor(weight/total * squad_subunits)
+                    raw_shares = [int(squad_subunits * w / total_weight) for w in weights]
+                    remainder = squad_subunits - sum(raw_shares)
+
+                    # Distribute remainder cents to highest-weight members first
+                    order = sorted(range(len(members)), key=lambda i: weights[i], reverse=True)
+                    for i in range(remainder):
+                        raw_shares[order[i % len(order)]] += 1
+
+                    member_shares = raw_shares
+
+                total_member_payout = from_subunits(squad_subunits, currency)
+                total_overhead_payout = from_subunits(overhead_subunits, currency)
+                company_share = from_subunits(treasury_subunits, currency)
+
                 # 4. DISBURSEMENT: Update member wallets and record the history.
-                for member in members:
+                for idx, member in enumerate(members):
+                    member_share_subunits = member_shares[idx]
+                    per_member_payout = from_subunits(member_share_subunits, currency)
+
                     # Find each member's personal wallet.
                     stmt = select(Wallet).where(Wallet.user_id == member.id).with_for_update()
                     res = await session.execute(stmt)
                     wallet = res.scalars().first()
-                    
+
                     if not wallet:
                         # If they don't have a wallet yet, create one on the fly.
-                        wallet = Wallet(user_id=member.id, balance=Decimal("0.00"), currency="USD")
+                        wallet = Wallet(user_id=member.id, balance=Decimal("0.00"), currency=currency)
                         session.add(wallet)
                         await session.flush() # Ensure it gets an ID before we continue.
-                    
-                    # Update the balance.
-                    wallet.balance += per_member_payout
-                    
+
+                    # Update the balance using integer subunits
+                    w_curr = wallet.currency or currency
+                    w_subunits = to_subunits(wallet.balance, w_curr) + to_subunits(per_member_payout, w_curr)
+                    wallet.balance = from_subunits(w_subunits, w_curr)
+
                     # Create a TRANSACTION record: This is the 'receipt' so we can audit later.
                     transaction = Transaction(
                         wallet_id=wallet.id,
@@ -195,21 +242,24 @@ async def _process_payout_calculation_async(
 
                 # 5. COMPANY SHARE & OVERHEAD POOL:
                 # Retains Company Treasury share and Overhead pool in CompanyWallet
-                company_total_payout = company_share + total_overhead_payout
-                if company_total_payout > 0:
+                company_total_subunits = treasury_subunits + overhead_subunits
+                company_total_payout = from_subunits(company_total_subunits, currency)
+                if company_total_subunits > 0:
                     from app.db.models import CompanyWallet
                     stmt = select(CompanyWallet).with_for_update()
                     res = await session.execute(stmt)
                     company_wallet = res.scalars().first()
-                    
+
                     if not company_wallet:
-                        company_wallet = CompanyWallet(balance=Decimal("0.00"), currency="USD")
+                        company_wallet = CompanyWallet(balance=Decimal("0.00"), currency=currency)
                         session.add(company_wallet)
                         await session.flush()
-                    
-                    company_wallet.balance += company_total_payout
+
+                    cw_curr = company_wallet.currency or currency
+                    cw_subunits = to_subunits(company_wallet.balance, cw_curr) + company_total_subunits
+                    company_wallet.balance = from_subunits(cw_subunits, cw_curr)
                     logger.info(
-                        f"Financial Engine: Credited Treasury=${company_share}, Non-Billable Overhead=${total_overhead_payout} to Company Treasury for Project {project_id}"
+                        f"Financial Engine: Credited Treasury=${company_share}, Non-Billable Overhead=${total_overhead_payout} ({company_total_subunits} subunits) to Company Treasury for Project {project_id}"
                     )
 
                     # Backward compatibility: sync client/owner personal wallet if present
@@ -218,7 +268,9 @@ async def _process_payout_calculation_async(
                         res_cw = await session.execute(stmt_cw)
                         client_wallet = res_cw.scalars().first()
                         if client_wallet:
-                            client_wallet.balance += company_total_payout
+                            cl_curr = client_wallet.currency or currency
+                            cl_subunits = to_subunits(client_wallet.balance, cl_curr) + company_total_subunits
+                            client_wallet.balance = from_subunits(cl_subunits, cl_curr)
 
                 # Audit Log of the split breakdown
                 from app.db.models import AuditLog
@@ -231,9 +283,14 @@ async def _process_payout_calculation_async(
                         target_id=project_id,
                         details={
                             "total_budget": str(project.budget),
+                            "budget_subunits": budget_subunits,
+                            "currency": currency,
                             "squad_share": str(total_member_payout),
+                            "squad_subunits": squad_subunits,
                             "overhead_share": str(total_overhead_payout),
+                            "overhead_subunits": overhead_subunits,
                             "treasury_share": str(company_share),
+                            "treasury_subunits": treasury_subunits,
                             "member_count": len(members),
                             "split_model": active_settings.get("split_model", "three_tier_60_15_25"),
                         },

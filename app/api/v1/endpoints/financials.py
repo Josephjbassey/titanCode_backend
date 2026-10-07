@@ -32,6 +32,12 @@ from app.schemas.financials import (
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.core.tasks import enqueue_email_task, enqueue_websocket_task
 from app.core.rate_limiter import limiter
+from app.core.currency import (
+    to_subunits,
+    from_subunits,
+    distribute_subunits_equally,
+    split_subunits_by_percentages,
+)
 from starlette.requests import Request
 from sqlalchemy import func
 
@@ -139,6 +145,20 @@ async def request_withdrawal(
         raise HTTPException(status_code=400, detail="Bank info is required before requesting withdrawal")
     if withdrawal_in.amount <= 0:
         raise HTTPException(status_code=400, detail="Withdrawal amount must be greater than zero")
+    # Enforce min/max withdrawal limits from settings
+    withdrawal_settings = await _get_active_settings()
+    min_withdrawal = withdrawal_settings.get("min_withdrawal_amount", 50.0)
+    max_withdrawal = withdrawal_settings.get("max_withdrawal_amount")
+    if withdrawal_in.amount < min_withdrawal:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Minimum withdrawal amount is {min_withdrawal:.2f}"
+        )
+    if max_withdrawal and withdrawal_in.amount > max_withdrawal:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum withdrawal amount is {max_withdrawal:.2f}"
+        )
 
     tx_ctx = nullcontext() if db.in_transaction() else db.begin()
     async with tx_ctx:
@@ -146,21 +166,29 @@ async def request_withdrawal(
             select(Wallet).where(Wallet.user_id == current_user.id).with_for_update()
         )
         user_wallet = result.scalars().first()
-        if not user_wallet or user_wallet.balance < withdrawal_in.amount:
+        currency = getattr(user_wallet, "currency", "USD") if user_wallet else "USD"
+        
+        amount_subunits = to_subunits(withdrawal_in.amount, currency=currency)
+        if amount_subunits <= 0:
+            raise HTTPException(status_code=400, detail="Withdrawal amount must be greater than zero")
+
+        clean_amount = from_subunits(amount_subunits, currency=currency)
+        wallet_subunits = to_subunits(user_wallet.balance, currency=currency) if user_wallet else 0
+        if not user_wallet or wallet_subunits < amount_subunits:
             raise HTTPException(status_code=400, detail="Insufficient funds in your personal wallet")
 
         withdrawal = Withdrawal(
             user_id=current_user.id,
-            amount=withdrawal_in.amount,
+            amount=clean_amount,
             bank_info=bank_info,
             status="pending"
         )
         db.add(withdrawal)
-        user_wallet.balance -= withdrawal_in.amount
+        user_wallet.balance = from_subunits(wallet_subunits - amount_subunits, currency=currency)
         db.add(
             Transaction(
                 wallet_id=user_wallet.id,
-                amount=withdrawal_in.amount,
+                amount=clean_amount,
                 transaction_type="debit",
                 description=f"Withdrawal request #{current_user.id} (pending)",
                 reference_id=f"withdrawal:pending:user:{current_user.id}:{utcnow().isoformat()}",
@@ -272,7 +300,12 @@ async def process_withdrawal(
         if settings.PAYSTACK_SECRET_KEY and not settings.PAYSTACK_SECRET_KEY.startswith("sk_live_placeholder") and not settings.PAYSTACK_SECRET_KEY.startswith("sk_test_placeholder"):
             try:
                 import re
-                amount_kobo = int(Decimal(str(withdrawal.amount)) * 100)
+                user_res = await db.execute(select(Wallet).where(Wallet.user_id == withdrawal.user_id))
+                u_wallet = user_res.scalars().first()
+                currency = getattr(u_wallet, "currency", "USD") if u_wallet else "USD"
+
+                # Subunit amount strictly in smallest unit (kobo/cents) with no decimals
+                amount_subunits = to_subunits(withdrawal.amount, currency=currency)
                 recipient_code = "RCP_corporate_withdrawal"
                 bank_info_str = str(withdrawal.bank_info or "")
 
@@ -292,13 +325,13 @@ async def process_withdrawal(
                         },
                         json={
                             "source": "balance",
-                            "amount": amount_kobo,
+                            "amount": amount_subunits,
                             "recipient": recipient_code,
                             "reason": f"TitanCode payout #{withdrawal.id}",
                             "reference": withdrawal.external_payout_idempotency_key,
                         },
                     )
-                    logger.info("Paystack transfer initiated", extra={"status": paystack_res.status_code, "withdrawal_id": withdrawal.id, "recipient": recipient_code})
+                    logger.info("Paystack transfer initiated", extra={"status": paystack_res.status_code, "withdrawal_id": withdrawal.id, "recipient": recipient_code, "amount_subunits": amount_subunits})
             except Exception as exc:
                 logger.warning("Paystack transfer request error", extra={"error": str(exc), "withdrawal_id": withdrawal.id})
 
@@ -319,11 +352,16 @@ async def process_withdrawal(
         )
         user_wallet = result.scalars().first()
         if user_wallet:
-            user_wallet.balance += withdrawal.amount
+            w_curr = getattr(user_wallet, "currency", "USD") or "USD"
+            w_subunits = to_subunits(user_wallet.balance, currency=w_curr)
+            refund_subunits = to_subunits(withdrawal.amount, currency=w_curr)
+            clean_refund = from_subunits(refund_subunits, currency=w_curr)
+
+            user_wallet.balance = from_subunits(w_subunits + refund_subunits, currency=w_curr)
             db.add(
                 Transaction(
                     wallet_id=user_wallet.id,
-                    amount=withdrawal.amount,
+                    amount=clean_refund,
                     transaction_type="credit",
                     description=f"Withdrawal #{withdrawal.id} rejected - funds restored",
                     reference_id=f"withdrawal:refund:{withdrawal.id}",
@@ -465,23 +503,59 @@ class PricingTierModel(BaseModel):
     is_active: bool = True
 
 
+class SocialsModel(BaseModel):
+    linkedin: str = ""
+    twitter: str = ""
+    instagram: str = ""
+    tiktok: str = ""
+    github: str = ""
+
+
+class CompanyProfileModel(BaseModel):
+    legal_name: str = "TitanCode Technologies Inc."
+    phone: str = "+233(0)546606807"
+    address: str = "Remote"
+    website_url: str = "https://titancode.tech"
+    payment_redirect_url: str = "https://titancode.com/payments/complete"
+    email_from_name: str = "TitanCode Technologies"
+    email_signature: str = "— TitanCode Finance Team"
+    socials: SocialsModel = SocialsModel()
+    it_github_issues_url: str = "https://github.com/titancode/titancode/issues"
+    it_slack_channel_url: str = "https://slack.com/app_redirect?channel=it-support"
+    calendly_url: str = ""
+    whatsapp_number: str = "+233(0)546606807"
+    copyright_year: int = 2026
+
+
 class FinancialSettingsModel(BaseModel):
     company_name: str = "TitanCode Technologies Inc."
     support_email: str = "support@titancode.agency"
     currency: str = "USD"
     timezone: str = "UTC"
-    split_model: str = "standard_70_30"  # "standard_70_30" | "three_tier_60_15_25" | "custom"
-    platform_split_percent: float = 30.0
-    overhead_split_percent: float = 0.0
-    member_split_percent: float = 70.0
+    split_model: str = "three_tier_60_15_25"  # "standard_70_30" | "three_tier_60_15_25" | "custom"
+    platform_split_percent: float = 25.0
+    overhead_split_percent: float = 15.0
+    member_split_percent: float = 60.0
     notify_on_milestone: bool = True
     notify_on_withdrawal: bool = True
     pricing_tiers: List[PricingTierModel] = []
+    company_profile: CompanyProfileModel = CompanyProfileModel()
+    role_weights: dict[str, float] = {
+        "CEO": 2.0,
+        "Admin": 1.8,
+        "Manager": 1.5,
+        "Team Lead": 1.3,
+        "Member": 1.0,
+        "Assistant": 0.8,
+        "HR": 1.0,
+    }
+    min_withdrawal_amount: float = 50.0
+    max_withdrawal_amount: float | None = None
 
 
 class SalaryProjectionResponse(BaseModel):
     total_budget: float
-    split_model: str = "standard_70_30"
+    split_model: str = "three_tier_60_15_25"
     platform_split_percent: float
     overhead_split_percent: float = 0.0
     member_split_percent: float
@@ -504,13 +578,39 @@ _DEFAULT_SETTINGS = {
     "support_email": "support@titancode.agency",
     "currency": "USD",
     "timezone": "UTC",
-    "split_model": "standard_70_30",
-    "platform_split_percent": 30.0,
-    "overhead_split_percent": 0.0,
-    "member_split_percent": 70.0,
+    "split_model": "three_tier_60_15_25",
+    "platform_split_percent": 25.0,
+    "overhead_split_percent": 15.0,
+    "member_split_percent": 60.0,
     "notify_on_milestone": True,
     "notify_on_withdrawal": True,
     "pricing_tiers": _DEFAULT_PRICING_TIERS,
+    "role_weights": {
+        "CEO": 2.0,
+        "Admin": 1.8,
+        "Manager": 1.5,
+        "Team Lead": 1.3,
+        "Member": 1.0,
+        "Assistant": 0.8,
+        "HR": 1.0,
+    },
+    "min_withdrawal_amount": 50.0,
+    "max_withdrawal_amount": None,
+    "company_profile": {
+        "legal_name": "TitanCode Technologies Inc.",
+        "phone": "+233(0)546606807",
+        "address": "Remote",
+        "website_url": "https://titancode.tech",
+        "payment_redirect_url": "https://titancode.com/payments/complete",
+        "email_from_name": "TitanCode Technologies",
+        "email_signature": "— TitanCode Finance Team",
+        "socials": {"linkedin": "", "twitter": "", "instagram": "", "tiktok": "", "github": ""},
+        "it_github_issues_url": "https://github.com/titancode/titancode/issues",
+        "it_slack_channel_url": "https://slack.com/app_redirect?channel=it-support",
+        "calendly_url": "",
+        "whatsapp_number": "+233(0)546606807",
+        "copyright_year": 2026,
+    },
 }
 _SETTINGS_CACHE = dict(_DEFAULT_SETTINGS)
 SETTINGS_REDIS_KEY = "titancode:financial_settings"
@@ -600,10 +700,21 @@ async def calculate_salary_projection(
         o_split = float(active_settings.get("overhead_split_percent", 15.0))
         m_split = float(active_settings.get("member_split_percent", 60.0))
 
-    platform_share = round((budget * p_split) / 100.0, 2)
-    overhead_share = round((budget * o_split) / 100.0, 2)
-    team_share = round((budget * m_split) / 100.0, 2)
-    per_member = round(team_share / member_count, 2) if member_count > 0 else 0.0
+    budget_subunits = to_subunits(budget, currency="USD")
+    splits = split_subunits_by_percentages(
+        budget_subunits,
+        {"treasury": p_split, "overhead": o_split, "squad": m_split},
+        remainder_key="treasury",
+    )
+    platform_share = float(from_subunits(splits["treasury"], "USD"))
+    overhead_share = float(from_subunits(splits["overhead"], "USD"))
+    team_share = float(from_subunits(splits["squad"], "USD"))
+
+    if member_count > 0:
+        member_shares = distribute_subunits_equally(splits["squad"], member_count)
+        per_member = float(from_subunits(member_shares[0], "USD")) if member_shares else 0.0
+    else:
+        per_member = 0.0
 
     return SalaryProjectionResponse(
         total_budget=round(budget, 2),
