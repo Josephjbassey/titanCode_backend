@@ -34,9 +34,11 @@ from app.core.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.core.middleware import RequestLoggingMiddleware
 from app.core.observability import init_sentry
 from app.db.database import engine, AsyncSessionLocal
-from app.db.models import User
+from app.db.models import User, IntegrationConfig
 from app.core.domain_enums import UserRole, ApprovalStatus
 from app.api.v1.endpoints import auth, users, departments, applications, projects, tasks, wallets, notifications, files, meetings, products, revenue, financials, webhooks, client, billing, leads, dashboard, activity
+from app.api.v1.endpoints.integrations import router as integrations_router
+from app.api.v1.endpoints.public import router as public_router
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -83,6 +85,44 @@ async def seed_default_admin():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# DATABASE SEED: Known Integration Configs
+# ═══════════════════════════════════════════════════════════════════════
+KNOWN_INTEGRATIONS = ["hubspot", "slack", "paystack", "flutterwave", "stripe", "sumsub", "crisp"]
+
+
+async def seed_integration_configs():
+    """
+    Upsert a row in integration_configs for each known external service.
+    Runs on every startup but is idempotent — existing rows are not overwritten.
+    Initial credentials come from .env settings; toggle is_active via the admin API.
+    """
+    from app.core.config import settings
+    import json
+
+    env_credentials: dict[str, dict] = {
+        "hubspot": {"access_token": settings.HUBSPOT_ACCESS_TOKEN} if settings.HUBSPOT_ACCESS_TOKEN else {},
+        "slack": {"webhook_url": settings.SLACK_WEBHOOK_URL} if settings.SLACK_WEBHOOK_URL else {},
+    }
+
+    async with AsyncSessionLocal() as session:
+        for name in KNOWN_INTEGRATIONS:
+            result = await session.execute(
+                select(IntegrationConfig).where(IntegrationConfig.service_name == name)
+            )
+            if not result.scalars().first():
+                creds = env_credentials.get(name, {})
+                session.add(
+                    IntegrationConfig(
+                        service_name=name,
+                        is_active=True,
+                        credentials_json=json.dumps(creds) if creds else None,
+                    )
+                )
+        await session.commit()
+    logger.info("Integration configs seeded for: %s", ", ".join(KNOWN_INTEGRATIONS))
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # APPLICATION LIFESPAN (Startup & Shutdown)
 # ═══════════════════════════════════════════════════════════════════════
 @asynccontextmanager
@@ -114,6 +154,9 @@ async def lifespan(app: FastAPI):
             "Skipping default admin seed because AUTO_SEED_DEFAULT_ADMIN is disabled for ENVIRONMENT=%s",
             settings.ENVIRONMENT,
         )
+
+    # Step 3: Seed known integration configs (idempotent)
+    await seed_integration_configs()
 
     yield  # ← Application runs here, handling requests
 
@@ -178,6 +221,8 @@ app.include_router(billing.router, prefix=f"{settings.API_V1_STR}/billing", tags
 app.include_router(leads.router, prefix=f"{settings.API_V1_STR}/leads", tags=["leads"])
 app.include_router(dashboard.router, prefix=f"{settings.API_V1_STR}/dashboard", tags=["dashboard"])
 app.include_router(activity.router, prefix=f"{settings.API_V1_STR}/activity", tags=["activity"])
+app.include_router(integrations_router, prefix=f"{settings.API_V1_STR}/admin/integrations", tags=["Integrations"])
+app.include_router(public_router, prefix=f"{settings.API_V1_STR}/public", tags=["Public"])
 
 
 # ═══════════════════════════════════════════════════════════════════════

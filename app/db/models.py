@@ -627,3 +627,41 @@ class AuditLog(Base):
     target_id = Column(Integer, nullable=False)
     details = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INTEGRATION CONFIG MODEL
+# ═══════════════════════════════════════════════════════════════════════
+
+class IntegrationConfig(Base):
+    """Stores configuration and credentials for each external service integration."""
+    __tablename__ = "integration_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    service_name = Column(String(64), unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    credentials_json = Column(Text, nullable=True)   # JSON string; store encrypted in prod
+    metadata_json = Column(Text, nullable=True)       # Extra config per integration
+    last_synced_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    events = relationship("IntegrationEvent", back_populates="integration", cascade="all, delete-orphan")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INTEGRATION EVENT MODEL
+# ═══════════════════════════════════════════════════════════════════════
+
+class IntegrationEvent(Base):
+    """Audit log for every outbound call made through the Integration Registry."""
+    __tablename__ = "integration_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    integration_id = Column(Integer, ForeignKey("integration_configs.id"), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False)   # e.g. "hubspot_contact_sync", "slack_notification"
+    payload_json = Column(Text, nullable=True)
+    status = Column(String(16), default="success", nullable=False)  # "success" | "failed" | "skipped"
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    integration = relationship("IntegrationConfig", back_populates="events")

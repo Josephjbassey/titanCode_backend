@@ -26,6 +26,7 @@ from app.schemas.project import (
 )
 from app.api.v1.endpoints.auth import get_current_user, RoleChecker
 from app.services.project_service import ProjectService
+from app.services.integration_service import IntegrationService
 from app.core.notifications import manager as notification_manager
 from app.core.email import send_email
 from app.tasks.financials import process_payout_calculation
@@ -166,20 +167,12 @@ async def update_project(
     # Step 5: Trigger Background Payout Task (Constraint #2 compliance) & Slack Notification
     if trigger_payout:
         process_payout_calculation.delay(project.id)
-        if settings.SLACK_WEBHOOK_URL:
-            try:
-                import httpx
-                slack_msg = {
-                    "text": (
-                        f"🚀 *Project Completed:* {project.name}\n"
-                        f"*Budget:* ${float(project.budget):,.2f} USD\n"
-                        f"Automated squad payouts initiated via Paystack multi-currency settlement."
-                    )
-                }
-                async with httpx.AsyncClient(timeout=4.0) as client_http:
-                    await client_http.post(settings.SLACK_WEBHOOK_URL, json=slack_msg)
-            except Exception as exc:
-                logger.warning("Slack milestone dispatch failed: %s", exc)
+        slack_message = (
+            f"🚀 *Project Completed:* {project.name}\n"
+            f"*Budget:* ${float(project.budget):,.2f} USD\n"
+            f"Automated squad payouts initiated via Paystack multi-currency settlement."
+        )
+        await IntegrationService.dispatch_slack_notification(db, slack_message)
 
     # Step 6: Notify client on status change
     if project_in.status and project.client_id:
@@ -345,21 +338,13 @@ async def add_project_comment(
     await db.commit()
     await db.refresh(comment_audit)
 
-    # 1. Post to Slack if configured
-    if settings.SLACK_WEBHOOK_URL:
-        try:
-            import httpx
-            slack_msg = {
-                "text": (
-                    f"💬 *Project Update on {project.name}*\n"
-                    f"*From:* {author_name} ({current_user.role})\n"
-                    f">{content}"
-                )
-            }
-            async with httpx.AsyncClient(timeout=4.0) as client_http:
-                await client_http.post(settings.SLACK_WEBHOOK_URL, json=slack_msg)
-        except Exception as exc:
-            logger.warning("Slack comment notification failed: %s", exc)
+    # 1. Post to Slack via Integration Registry
+    slack_message = (
+        f"💬 *Project Update on {project.name}*\n"
+        f"*From:* {author_name} ({current_user.role})\n"
+        f">{content}"
+    )
+    await IntegrationService.dispatch_slack_notification(db, slack_message)
 
     # 2. Push WebSocket notification to project participants
     recipients = {m.id for m in project.members}
